@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Live Pixel Canvas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #1a202c; }
+        .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .tab { transition: all 0.2s ease-in-out; }
+        .tab.active { border-color: #63b3ed; background-color: #2b6cb0; }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-900 text-white min-h-screen p-4 sm:p-6 md:p-8">
+
+    <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-80 flex flex-col items-center justify-center z-50 p-4">
+        <div class="loader"></div>
+        <p class="mt-4 text-lg">Initializing Admin Panel...</p>
+    </div>
+
+    <div id="access-denied" class="hidden flex-col items-center justify-center text-center p-8 min-h-screen">
+        <h1 class="text-4xl font-bold mb-4 text-red-500">ACCESS DENIED</h1>
+        <p class="text-gray-400 max-w-md">You do not have permission to view this page. Please sign in with an authorized account.</p>
+        <button id="admin-login-btn" class="mt-8 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg flex items-center gap-3 transition-transform transform hover:scale-105">
+            Sign in with Google
+        </button>
+    </div>
+
+    <div id="admin-dashboard" class="hidden w-full max-w-6xl mx-auto">
+        <div class="flex flex-wrap justify-between items-center mb-6 gap-4">
+            <h1 class="text-3xl font-bold">Admin Dashboard</h1>
+            <div class="flex items-center gap-2">
+                <span id="welcome-message" class="text-gray-400"></span>
+                <button id="admin-logout-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2">Logout</button>
+            </div>
+        </div>
+
+        <div id="tabs-container" class="mb-6 flex border-b border-gray-700">
+            <button data-tab="users" class="tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white">User Management</button>
+            <button data-tab="admins" id="admin-management-tab" class="hidden tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white">Admin Management</button>
+            <button data-tab="canvas" id="canvas-management-tab" class="hidden tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white">Canvas Management</button>
+        </div>
+
+        <!-- User Management Tab -->
+        <div id="users-tab-content" class="tab-content hidden">
+            <div class="bg-gray-800 p-6 rounded-lg">
+                <h2 class="text-2xl font-semibold mb-4">Users</h2>
+                <input type="text" id="user-search" placeholder="Search by User ID..." class="w-full bg-gray-700 text-white rounded-md px-4 py-2 mb-4 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <div id="user-list" class="space-y-3 max-h-[60vh] overflow-y-auto"></div>
+            </div>
+        </div>
+        
+        <!-- Canvas Management Tab (Super Admin only) -->
+        <div id="canvas-tab-content" class="tab-content hidden">
+             <div class="bg-gray-800 p-6 rounded-lg">
+                <h2 class="text-2xl font-semibold mb-4">Canvas Tools</h2>
+                <p class="text-gray-300 mb-4">This will permanently delete all pixels from the canvas. This action cannot be undone.</p>
+                <button id="clear-canvas-btn" class="bg-red-800 hover:bg-red-900 text-white font-bold py-2 px-4 rounded-md">ERASE ENTIRE CANVAS</button>
+            </div>
+        </div>
+
+        <!-- Admin Management Tab (Super Admin only) -->
+        <div id="admins-tab-content" class="tab-content hidden">
+            <div class="bg-gray-800 p-6 rounded-lg mb-6">
+                <h2 class="text-2xl font-semibold mb-4">Manage Regular Admins</h2>
+                <div class="flex flex-wrap gap-4 mb-4">
+                    <input type="text" id="add-admin-uid" placeholder="Enter User ID to make admin" class="flex-grow bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[250px]">
+                    <button id="add-admin-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">Add Admin</button>
+                </div>
+                <div id="admin-list" class="space-y-3 max-h-64 overflow-y-auto"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, getDocs, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'live-pixel-canvas';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {"apiKey":"AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4","authDomain":"pixel-ed9f4.firebaseapp.com","projectId":"pixel-ed9f4","storageBucket":"pixel-ed9f4.appspot.com","messagingSenderId":"61835815357","appId":"1:61835815357:web:579d025b165c1edcbc8ad4"};
+
+        const SUPER_ADMIN_UID = "5ECFbV0p1QTMDxOjbalkPMdEl2m1";
+        const ADMINS_COLLECTION_NAME = 'admins';
+        const BANNED_USERS_COLLECTION_NAME = 'bannedUsers';
+        const PIXEL_COLLECTION_NAME = 'pixels';
+
+        let db, auth;
+        let currentUserRole = null; // null, 'regular', or 'super'
+        let allUsers = new Map(); // For caching user data
+
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const accessDenied = document.getElementById('access-denied');
+        const adminDashboard = document.getElementById('admin-dashboard');
+        const adminLoginBtn = document.getElementById('admin-login-btn');
+        const adminLogoutBtn = document.getElementById('admin-logout-btn');
+        const userListContainer = document.getElementById('user-list');
+        const adminListContainer = document.getElementById('admin-list');
+        const addAdminUidInput = document.getElementById('add-admin-uid');
+        const addAdminBtn = document.getElementById('add-admin-btn');
+        const adminManagementTab = document.getElementById('admin-management-tab');
+        const canvasManagementTab = document.getElementById('canvas-management-tab');
+        const clearCanvasBtn = document.getElementById('clear-canvas-btn');
+        const userSearchInput = document.getElementById('user-search');
+        const welcomeMessage = document.getElementById('welcome-message');
+        
+        const tabs = document.querySelectorAll('.tab');
+        const tabContents = document.querySelectorAll('.tab-content');
+
+        async function initialize() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        await checkUserRole(user);
+                    } else {
+                        currentUserRole = null;
+                        showAccessDenied();
+                    }
+                    loadingOverlay.classList.add('hidden');
+                });
+
+                adminLoginBtn.addEventListener('click', () => signInWithPopup(auth, new GoogleAuthProvider()));
+                adminLogoutBtn.addEventListener('click', () => signOut(auth));
+                addAdminBtn.addEventListener('click', addAdmin);
+                clearCanvasBtn.addEventListener('click', clearCanvas);
+                userSearchInput.addEventListener('input', renderUserList);
+                setupTabs();
+
+            } catch (error) {
+                console.error("Initialization Error:", error);
+                loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
+            }
+        }
+
+        function setupTabs() {
+            tabs.forEach(tab => tab.addEventListener('click', () => {
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                tabContents.forEach(content => content.id === `${tab.dataset.tab}-tab-content` ? content.classList.remove('hidden') : content.classList.add('hidden'));
+            }));
+            tabs[0].click(); // Default to first tab
+        }
+
+        async function checkUserRole(user) {
+            welcomeMessage.textContent = `Welcome, ${user.displayName || 'Admin'}`;
+            if (user.uid === SUPER_ADMIN_UID) {
+                currentUserRole = 'super';
+                showDashboard();
+            } else {
+                const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, user.uid);
+                const docSnap = await getDoc(adminDocRef);
+                currentUserRole = docSnap.exists() ? 'regular' : null;
+                docSnap.exists() ? showDashboard() : showAccessDenied();
+            }
+        }
+        
+        function showAccessDenied() {
+            adminDashboard.classList.add('hidden');
+            accessDenied.classList.remove('hidden');
+        }
+
+        function showDashboard() {
+            accessDenied.classList.add('hidden');
+            adminDashboard.classList.remove('hidden');
+            
+            if (currentUserRole === 'super') {
+                adminManagementTab.classList.remove('hidden');
+                canvasManagementTab.classList.remove('hidden');
+                loadAdminList();
+            } else {
+                adminManagementTab.classList.add('hidden');
+                canvasManagementTab.classList.add('hidden');
+            }
+            fetchAllUsers();
+        }
+        
+        async function fetchAllUsers() {
+            const pixelsCollection = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
+            const adminsCollection = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
+            const bannedCollection = collection(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`);
+
+            const [pixelSnapshot, adminSnapshot, bannedSnapshot] = await Promise.all([
+                getDocs(pixelsCollection), getDocs(adminsCollection), getDocs(bannedCollection)
+            ]);
+            
+            const adminIds = new Set(adminSnapshot.docs.map(d => d.id));
+            adminIds.add(SUPER_ADMIN_UID);
+            const bannedIds = new Set(bannedSnapshot.docs.map(d => d.id));
+
+            allUsers.clear();
+            pixelSnapshot.forEach(doc => {
+                const data = doc.data();
+                if (data.userId && !allUsers.has(data.userId)) {
+                    allUsers.set(data.userId, { 
+                        uid: data.userId, 
+                        isAdmin: adminIds.has(data.userId), 
+                        isBanned: bannedIds.has(data.userId) 
+                    });
+                }
+            });
+            renderUserList();
+        }
+        
+        function renderUserList() {
+            const searchTerm = userSearchInput.value.toLowerCase();
+            userListContainer.innerHTML = '';
+            
+            const usersToDisplay = Array.from(allUsers.values()).filter(user => user.uid.toLowerCase().includes(searchTerm));
+
+            if (usersToDisplay.length === 0) {
+                 userListContainer.innerHTML = `<p class="text-gray-500">No users found.</p>`;
+                 return;
+            }
+
+            usersToDisplay.forEach(user => {
+                const userElement = document.createElement('div');
+                userElement.className = 'flex flex-wrap items-center justify-between bg-gray-700 p-3 rounded-md gap-2';
+                
+                let buttons = `
+                    <button data-uid="${user.uid}" class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold py-1 px-3 rounded-md view-pixels-btn">View Pixels</button>
+                    <button data-uid="${user.uid}" class="${user.isBanned ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-red-600 hover:bg-red-700'} text-white text-sm font-bold py-1 px-3 rounded-md toggle-ban-btn">
+                        ${user.isBanned ? 'Unban' : 'Ban'}
+                    </button>
+                `;
+
+                if (currentUserRole === 'super' && !user.isAdmin) {
+                    buttons += `<button data-uid="${user.uid}" class="bg-green-500 hover:bg-green-600 text-white text-sm font-bold py-1 px-3 rounded-md promote-admin-btn">Promote</button>`;
+                }
+                
+                let roleBadge = user.isAdmin ? `<span class="text-xs font-bold uppercase text-yellow-400">Admin</span>` : '';
+
+                userElement.innerHTML = `
+                    <div class="flex-grow min-w-0"><span class="font-mono text-sm break-all">${user.uid}</span> ${roleBadge}</div>
+                    <div class="flex gap-2 flex-shrink-0">${!user.isAdmin ? buttons : ''}</div>
+                `;
+                userListContainer.appendChild(userElement);
+            });
+            
+            document.querySelectorAll('.toggle-ban-btn').forEach(b => b.addEventListener('click', toggleBan));
+            document.querySelectorAll('.promote-admin-btn').forEach(b => b.addEventListener('click', promoteToAdmin));
+        }
+
+
+        async function loadAdminList() {
+            if (currentUserRole !== 'super') return;
+            const adminsCollection = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
+            onSnapshot(adminsCollection, (snapshot) => {
+                adminListContainer.innerHTML = '';
+                snapshot.forEach(doc => {
+                    const adminElement = document.createElement('div');
+                    adminElement.className = 'flex items-center justify-between bg-gray-700 p-3 rounded-md';
+                    adminElement.innerHTML = `
+                        <span class="font-mono text-sm">${doc.id}</span>
+                        <button data-uid="${doc.id}" class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-1 px-3 rounded-md remove-admin-btn">Remove</button>
+                    `;
+                    adminListContainer.appendChild(adminElement);
+                });
+                document.querySelectorAll('.remove-admin-btn').forEach(b => b.addEventListener('click', removeAdmin));
+            });
+        }
+        
+        async function promoteToAdmin(e) {
+            if (currentUserRole !== 'super') return;
+            const uid = e.target.dataset.uid;
+            if (confirm(`Are you sure you want to promote ${uid} to a regular admin?`)) {
+                 const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
+                 await setDoc(adminDocRef, { promotedAt: new Date(), promotedBy: auth.currentUser.uid });
+                 fetchAllUsers(); // Refresh list
+            }
+        }
+
+        async function addAdmin() {
+            if (currentUserRole !== 'super') return;
+            const uid = addAdminUidInput.value.trim();
+            if (!uid) return alert("Please enter a User ID.");
+            if (uid === SUPER_ADMIN_UID) return alert("Cannot modify super admin.");
+            
+            const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
+            await setDoc(adminDocRef, { addedAt: new Date(), addedBy: auth.currentUser.uid });
+            addAdminUidInput.value = '';
+            fetchAllUsers();
+        }
+
+        async function removeAdmin(e) {
+            if (currentUserRole !== 'super') return;
+            const uid = e.target.dataset.uid;
+            if (confirm(`Are you sure you want to remove admin privileges for ${uid}?`)) {
+                const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
+                await deleteDoc(adminDocRef);
+                fetchAllUsers();
+            }
+        }
+        
+        async function toggleBan(e) {
+            const uid = e.target.dataset.uid;
+            const user = allUsers.get(uid);
+            if (!user) return;
+            
+            const banDocRef = doc(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`, uid);
+            if (user.isBanned) {
+                if (confirm(`Are you sure you want to unban user ${uid}?`)) {
+                    await deleteDoc(banDocRef);
+                }
+            } else {
+                if (confirm(`Are you sure you want to ban user ${uid}?`)) {
+                    await setDoc(banDocRef, { bannedAt: new Date(), bannedBy: auth.currentUser.uid });
+                }
+            }
+            fetchAllUsers();
+        }
+        
+        async function clearCanvas() {
+            if (currentUserRole !== 'super') return;
+            if (!confirm("ARE YOU ABSOLUTELY SURE?\nThis will delete every pixel on the canvas permanently.")) return;
+            
+            loadingOverlay.classList.remove('hidden');
+            const pixelsRef = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
+            const snapshot = await getDocs(pixelsRef);
+            const batch = writeBatch(db);
+            snapshot.docs.forEach(d => batch.delete(d.ref));
+            await batch.commit();
+            loadingOverlay.classList.add('hidden');
+            alert("Canvas has been cleared.");
+        }
+
+        initialize();
+    </script>
+</body>
+</html>
+
