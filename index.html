@@ -17,6 +17,7 @@
         .eraser { border: 3px solid transparent; }
         .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .notice { transition: opacity 0.5s, transform 0.5s; }
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -27,6 +28,10 @@
     <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-80 flex flex-col items-center justify-center z-50 p-4">
         <div class="loader"></div>
         <p class="mt-4 text-lg">Connecting...</p>
+    </div>
+    
+    <div id="error-notice" class="notice hidden fixed top-0 left-1/2 -translate-x-1/2 mt-4 bg-red-800 text-white py-2 px-5 rounded-lg shadow-lg opacity-0 -translate-y-10 z-40">
+        <!-- Error messages will be inserted here -->
     </div>
 
     <!-- Login Container -->
@@ -73,7 +78,7 @@
         let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
         const DRAG_THRESHOLD = 5;
 
-        const viewport = document.getElementById('canvas-viewport'), grid = document.getElementById('pixel-grid'), colorPalette = document.getElementById('color-palette'), eraserButton = document.getElementById('eraser'), userDisplay = document.getElementById('user-display'), loadingOverlay = document.getElementById('loading-overlay'), loginContainer = document.getElementById('login-container'), appContainer = document.getElementById('app-container'), googleLoginBtn = document.getElementById('google-login-btn');
+        const viewport = document.getElementById('canvas-viewport'), grid = document.getElementById('pixel-grid'), colorPalette = document.getElementById('color-palette'), eraserButton = document.getElementById('eraser'), userDisplay = document.getElementById('user-display'), loadingOverlay = document.getElementById('loading-overlay'), loginContainer = document.getElementById('login-container'), appContainer = document.getElementById('app-container'), googleLoginBtn = document.getElementById('google-login-btn'), errorNotice = document.getElementById('error-notice');
 
         function hexToRgb(hex) {
             if (!hex || typeof hex !== 'string') return null;
@@ -117,6 +122,15 @@
                 loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
             }
         }
+        
+        function showError(message) {
+            errorNotice.textContent = message;
+            errorNotice.classList.remove('hidden', 'opacity-0', '-translate-y-10');
+            setTimeout(() => {
+                errorNotice.classList.add('opacity-0', '-translate-y-10');
+                setTimeout(() => errorNotice.classList.add('hidden'), 500);
+            }, 5000);
+        }
 
         async function handleGoogleLogin() {
             const provider = new GoogleAuthProvider();
@@ -124,7 +138,7 @@
                 await signInWithPopup(auth, provider);
             } catch (error) {
                 console.error("Google Sign-In Error:", error);
-                alert("Could not sign in with Google. Please try again.");
+                showError("Sign-in failed. Check console for details & enable popups.");
             }
         }
 
