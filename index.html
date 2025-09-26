@@ -38,6 +38,11 @@
     <div id="error-notice" class="notice hidden fixed top-0 left-1/2 -translate-x-1/2 mt-4 bg-red-800 text-white py-2 px-5 rounded-lg shadow-lg opacity-0 -translate-y-10 z-40">
         <!-- Error messages will be inserted here -->
     </div>
+    
+    <div id="banned-container" class="hidden flex-col items-center justify-center text-center p-8">
+         <h1 class="text-4xl font-bold mb-4 text-red-500">Access Denied</h1>
+        <p class="text-gray-400 max-w-md">Your account has been banned from participating.</p>
+    </div>
 
     <!-- Login Container -->
     <div id="login-container" class="hidden flex-col items-center justify-center text-center p-8">
@@ -71,19 +76,19 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'live-pixel-canvas';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {"apiKey":"AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4","authDomain":"pixel-ed9f4.firebaseapp.com","projectId":"pixel-ed9f4","storageBucket":"pixel-ed9f4.appspot.com","messagingSenderId":"61835815357","appId":"1:61835815357:web:579d025b165c1edcbc8ad4"};
         
-        const GRID_WIDTH = 100, GRID_HEIGHT = 76, PIXEL_COLLECTION_NAME = 'pixels';
+        const GRID_WIDTH = 100, GRID_HEIGHT = 76, PIXEL_COLLECTION_NAME = 'pixels', BANNED_USERS_COLLECTION_NAME = 'bannedUsers';
         const COLORS = ['#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000', '#FF4500', '#FFA800', '#FFD635', '#00A368', '#7EED56', '#2450A4', '#3690EA', '#51E9F4', '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'];
         
         let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, isFreeDrawing = false;
         let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
         const DRAG_THRESHOLD = 5;
 
-        const viewport = document.getElementById('canvas-viewport'), grid = document.getElementById('pixel-grid'), colorPalette = document.getElementById('color-palette'), eraserButton = document.getElementById('eraser'), userDisplay = document.getElementById('user-display'), loadingOverlay = document.getElementById('loading-overlay'), loginContainer = document.getElementById('login-container'), appContainer = document.getElementById('app-container'), googleLoginBtn = document.getElementById('google-login-btn'), errorNotice = document.getElementById('error-notice'), logoutBtn = document.getElementById('logout-btn');
+        const viewport = document.getElementById('canvas-viewport'), grid = document.getElementById('pixel-grid'), colorPalette = document.getElementById('color-palette'), eraserButton = document.getElementById('eraser'), userDisplay = document.getElementById('user-display'), loadingOverlay = document.getElementById('loading-overlay'), loginContainer = document.getElementById('login-container'), appContainer = document.getElementById('app-container'), googleLoginBtn = document.getElementById('google-login-btn'), errorNotice = document.getElementById('error-notice'), logoutBtn = document.getElementById('logout-btn'), bannedContainer = document.getElementById('banned-container');
 
         function hexToRgb(hex) {
             if (!hex || typeof hex !== 'string') return null;
@@ -99,9 +104,15 @@
                 db = getFirestore(app);
                 auth = getAuth(app);
                 
-                onAuthStateChanged(auth, (user) => {
+                onAuthStateChanged(auth, async (user) => {
                     loadingOverlay.classList.add('hidden');
                     if (user) {
+                        const isBanned = await checkBanStatus(user.uid);
+                        if (isBanned) {
+                            showBannedMessage();
+                            return;
+                        }
+
                         userId = user.uid;
                         userDisplay.textContent = user.displayName || user.email;
                         loginContainer.classList.add('hidden');
@@ -119,6 +130,7 @@
                         loginContainer.classList.remove('hidden');
                         loginContainer.classList.add('flex');
                         logoutBtn.classList.add('hidden');
+                        bannedContainer.classList.add('hidden');
                     }
                 });
 
@@ -129,6 +141,26 @@
                 console.error("Firebase Initialization Error:", error);
                 loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
             }
+        }
+        
+        async function checkBanStatus(uid) {
+            try {
+                const banDocRef = doc(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`, uid);
+                const docSnap = await getDoc(banDocRef);
+                return docSnap.exists();
+            } catch (error) {
+                console.error("Error checking ban status:", error);
+                return false;
+            }
+        }
+
+        function showBannedMessage() {
+            loginContainer.classList.add('hidden');
+            appContainer.classList.add('hidden');
+            appContainer.classList.remove('flex');
+            bannedContainer.classList.remove('hidden');
+            bannedContainer.classList.add('flex');
+            logoutBtn.classList.remove('hidden');
         }
         
         function showError(message) {
