@@ -66,7 +66,7 @@
         </button>
     </div>
 
-    <div id="app-container" class="hidden flex w-full max-w-7xl h-full mx-auto flex-col lg:flex-row items-center justify-center gap-4 lg:gap-8">
+    <div id="app-container" class="hidden w-full max-w-7xl h-full mx-auto flex-col lg:flex-row items-center justify-center gap-4 lg:gap-8">
         <div id="canvas-viewport" class="canvas-viewport rounded-lg">
             <div id="pixel-grid" class="pixel-grid"></div>
         </div>
@@ -100,7 +100,7 @@
         import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, getDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'live-pixel-canvas';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {"apiKey":"AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4","authDomain":"pixel-ed9f4.firebaseapp.com","projectId":"pixel-ed9f4","storageBucket":"pixel-ed9f4.appspot.com","messagingSenderId":"61835815357","appId":"1:61835815357:web:579d025b165c1edcbc8ad4"};
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {"apiKey":"AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4","authDomain":"pixel-ed_f4.firebaseapp.com","projectId":"pixel-ed9f4","storageBucket":"pixel-ed9f4.appspot.com","messagingSenderId":"61835815357","appId":"1:61835815357:web:579d025b165c1edcbc8ad4"};
         
         const SUPER_ADMIN_UID = "5ECFbV0p1QTMDxOjbalkPMdEl2m1";
         const GRID_WIDTH = 100, GRID_HEIGHT = 76;
@@ -109,7 +109,7 @@
         const COLORS = ['#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000', '#FF4500', '#FFA800', '#FFD635', '#00A368', '#7EED56', '#2450A4', '#3690EA', '#51E9F4', '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'];
         
         let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval, isAdmin = false;
-        let viewedUserId = null, pendingPixel = null, lastPlacementTime = 0, cooldownInterval;
+        let viewedUserId = null, pendingPixel = null, cooldownInterval, userDocUnsubscribe, userDocData = null;
         let isFreeDrawing = false, isAdminBrushActive = false;
         let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
         const DRAG_THRESHOLD = 5;
@@ -136,23 +136,21 @@
                 auth = getAuth(app);
                 
                 onAuthStateChanged(auth, async (user) => {
-                    ui.loadingOverlay.classList.add('hidden');
                     if (presenceInterval) clearInterval(presenceInterval);
+                    if (userDocUnsubscribe) userDocUnsubscribe();
+                    ui.loadingOverlay.classList.add('hidden');
 
                     if (user) {
-                        let isBanned;
-                        [isBanned, isAdmin] = await Promise.all([checkBanStatus(user.uid), checkAdminStatus(user.uid)]);
-                        
+                        const isBanned = await checkBanStatus(user.uid);
                         if (isBanned) {
                             showBannedMessage();
                             return;
                         }
                         
-                        updateUserPresence(user);
-                        presenceInterval = setInterval(() => updateUserPresence(user), 60000);
-
-                        if (isAdmin) ui.adminBtn.classList.remove('hidden');
-                        else ui.adminBtn.classList.add('hidden');
+                        isAdmin = await checkAdminStatus(user.uid);
+                        if (isAdmin) ui.adminBtn.classList.remove('hidden'); else ui.adminBtn.classList.add('hidden');
+                        
+                        setupUserSession(user);
 
                         userId = user.uid;
                         ui.userDisplay.textContent = user.displayName || user.email;
@@ -167,6 +165,7 @@
                     } else {
                         userId = null;
                         isAdmin = false;
+                        userDocData = null;
                         ui.appContainer.classList.add('hidden');
                         ui.loginContainer.classList.remove('hidden');
                         ui.logoutBtn.classList.add('hidden');
@@ -186,9 +185,16 @@
             }
         }
 
-        async function updateUserPresence(user) {
+        function setupUserSession(user) {
             const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, user.uid);
-            await setDoc(userDocRef, { uid: user.uid, displayName: user.displayName, email: user.email, lastSeen: serverTimestamp() }, { merge: true });
+            
+            setDoc(userDocRef, { uid: user.uid, displayName: user.displayName, email: user.email, lastSeen: serverTimestamp() }, { merge: true });
+            presenceInterval = setInterval(() => setDoc(userDocRef, { lastSeen: serverTimestamp() }, { merge: true }), 60000);
+
+            userDocUnsubscribe = onSnapshot(userDocRef, (docSnap) => {
+                userDocData = docSnap.exists() ? docSnap.data() : { uid: user.uid, displayName: user.displayName, email: user.email };
+                checkInitialCooldown();
+            });
         }
 
         async function checkAdminStatus(uid) {
@@ -252,19 +258,14 @@
 
         function centerCanvas() {
             const viewportRect = ui.viewport.getBoundingClientRect();
-            // Calculate scale to fit the entire grid with a small margin
-            const scaleX = viewportRect.width / (GRID_WIDTH * 15);
-            const scaleY = viewportRect.height / (GRID_HEIGHT * 15);
+            const scaleX = viewportRect.width / (GRID_WIDTH * 15), scaleY = viewportRect.height / (GRID_HEIGHT * 15);
             scale = Math.min(scaleX, scaleY) * 0.9;
-            // Center the canvas
             panX = (viewportRect.width - (GRID_WIDTH * 15 * scale)) / 2;
             panY = (viewportRect.height - (GRID_HEIGHT * 15 * scale)) / 2;
             updateTransform();
         }
 
-        function updateTransform() {
-            ui.grid.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
-        }
+        function updateTransform() { ui.grid.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`; }
 
         function createColorPalette() {
             ui.colorPalette.innerHTML = '';
@@ -298,14 +299,12 @@
                 updateSelectedToolUI();
             });
             ui.eraserButton.addEventListener('click', () => { isErasing = !isErasing; updateSelectedToolUI(); });
-            window.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = true; if (e.key.toLowerCase() === 'e' && isAdmin) isAdminBrushActive = true; });
-            window.addEventListener('keyup', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = false; if (e.key.toLowerCase() === 'e') isAdminBrushActive = false; });
+            window.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = true; });
+            window.addEventListener('keyup', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = false; });
             ui.grid.addEventListener('mousemove', e => { if (isPanning || !isFreeDrawing) return; const pixel = e.target.closest('.pixel'); if (pixel) initiatePlacement(parseInt(pixel.dataset.x), parseInt(pixel.dataset.y), true); });
         }
         
-        function getEventCoords(e) {
-            return e.touches ? { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY } : { clientX: e.clientX, clientY: e.clientY };
-        }
+        function getEventCoords(e) { return e.touches ? { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY } : { clientX: e.clientX, clientY: e.clientY }; }
 
         function onPanStart(e) {
             e.preventDefault(); isPanning = true; ui.viewport.classList.add('panning');
@@ -343,12 +342,21 @@
             panY = mouseY - (mouseY - panY) * (e.deltaY > 0 ? 1/zoomFactor : zoomFactor);
             updateTransform();
         }
-
-        function startCooldown() {
+        
+        function checkInitialCooldown() {
+            if (isAdmin || !userDocData || !userDocData.lastPixelPlacement) return;
+            const timeSinceLast = Date.now() - userDocData.lastPixelPlacement.toMillis();
+            if (timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
+                const secondsLeft = Math.ceil((PIXEL_COOLDOWN_S * 1000 - timeSinceLast) / 1000);
+                startCooldownUI(secondsLeft);
+            }
+        }
+        
+        function startCooldownUI(seconds = PIXEL_COOLDOWN_S) {
             if (isAdmin) return;
-            lastPlacementTime = Date.now();
+            if(cooldownInterval) clearInterval(cooldownInterval);
             ui.cooldownTimer.classList.remove('hidden');
-            let secondsLeft = PIXEL_COOLDOWN_S;
+            let secondsLeft = seconds;
             ui.cooldownSeconds.textContent = secondsLeft;
             cooldownInterval = setInterval(() => {
                 secondsLeft--;
@@ -361,15 +369,17 @@
         }
         
         function initiatePlacement(x, y, isAutoConfirm = false) {
-            if (!userId || viewedUserId) return;
-            const timeSinceLast = Date.now() - lastPlacementTime;
-            if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
-                if (!ui.cooldownTimer.classList.contains('hidden')) return; // Avoid re-triggering while visible
-                const secondsLeft = Math.ceil((PIXEL_COOLDOWN_S * 1000 - timeSinceLast) / 1000);
-                ui.cooldownSeconds.textContent = secondsLeft;
-                ui.cooldownTimer.classList.remove('hidden');
-                return;
+            if (!userId || viewedUserId || !userDocData) return;
+            
+            const lastPlacementTimestamp = userDocData.lastPixelPlacement;
+            if (!isAdmin && lastPlacementTimestamp) {
+                const timeSinceLast = Date.now() - lastPlacementTimestamp.toMillis();
+                if (timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
+                    if (ui.cooldownTimer.classList.contains('hidden')) checkInitialCooldown();
+                    return;
+                }
             }
+
             if (pendingPixel) cancelPlacement();
             
             const pixelEl = document.getElementById(`pixel-${x}-${y}`);
@@ -379,25 +389,24 @@
             pixelEl.style.backgroundColor = isErasing ? '#4a5568' : selectedColor;
             pixelEl.classList.add('pending');
 
-            if (isAutoConfirm && isAdmin) {
+            if ((isAutoConfirm && isAdmin) || (isAutoConfirm && !isAdmin)) {
                 confirmPlacement();
-            } else if (isAutoConfirm && !isAdmin) {
-                // For regular users with free-draw, we still respect cooldown but auto-confirm.
-                confirmPlacement();
-            }
-             else {
+            } else {
                 ui.pendingCoords.textContent = `${x}, ${y}`;
                 ui.placementUI.classList.remove('hidden');
             }
         }
         
-        function confirmPlacement() {
+        async function confirmPlacement() {
             if (!pendingPixel) return;
             const { x, y, color } = pendingPixel;
-            if (color === null) deletePixel(x, y);
-            else placePixel(x, y, color);
             
-            startCooldown();
+            const pixelPromise = color === null ? deletePixel(x, y) : placePixel(x, y, color);
+            const userUpdatePromise = setDoc(doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, userId), { lastPixelPlacement: serverTimestamp() }, { merge: true });
+
+            await Promise.all([pixelPromise, userUpdatePromise]);
+            
+            startCooldownUI();
             
             const pixelEl = document.getElementById(`pixel-${x}-${y}`);
             if(pixelEl) pixelEl.classList.remove('pending');
@@ -451,7 +460,6 @@
 
                     if (change.type === "added" || change.type === "modified") {
                         if (pendingPixel && pendingPixel.x === data.x && pendingPixel.y === data.y) {
-                           // Don't update the pending pixel from firestore, it will be handled by confirm/cancel
                         } else {
                            pixelElement.style.backgroundColor = data.color;
                         }
