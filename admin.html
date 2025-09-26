@@ -178,7 +178,9 @@
             const bannedRef = collection(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`);
 
             onSnapshot(usersRef, (snapshot) => {
-                snapshot.docs.forEach(d => allUsers.set(d.id, { ...allUsers.get(d.id), ...d.data() }));
+                snapshot.docChanges().forEach(change => {
+                    allUsers.set(change.doc.id, { ...allUsers.get(change.doc.id), ...change.doc.data() });
+                });
                 renderUserList();
             });
             onSnapshot(adminsRef, (snapshot) => {

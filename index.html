@@ -16,6 +16,7 @@
         .pixel { width: 15px; height: 15px; background-color: #4a5568; border: 1px solid #2d3748; transition: transform 0.1s ease-in-out, background-color 0.3s, opacity 0.3s; }
         .pixel:hover { transform: scale(1.2); z-index: 10; }
         .pixel.other-user { opacity: 0.2; pointer-events: none; }
+        .pixel.pending { box-shadow: 0 0 0 3px #facc15 inset; z-index: 20; }
         .color-swatch { width: 35px; height: 35px; cursor: pointer; border: 3px solid transparent; transition: border-color 0.2s ease-in-out; }
         .color-swatch.selected, .eraser.selected { border-color: #63b3ed; box-shadow: 0 0 0 3px rgba(99, 179, 237, 0.5); }
         .eraser { border: 3px solid transparent; }
@@ -41,7 +42,7 @@
     
     <div id="view-mode-notice" class="hidden fixed top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white py-2 px-5 rounded-lg shadow-lg z-20 flex items-center gap-4">
        <span id="view-mode-text"></span>
-       <a href="./admin.html" class="bg-blue-700 hover:bg-blue-800 text-white font-bold py-1 px-3 rounded-md">&times; Exit View</a>
+       <a href="./index.html" class="bg-blue-700 hover:bg-blue-800 text-white font-bold py-1 px-3 rounded-md">&times; Exit View</a>
     </div>
 
     <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-80 flex flex-col items-center justify-center z-50 p-4">
@@ -71,6 +72,16 @@
         </div>
         <div id="controls-panel" class="w-full lg:w-auto flex flex-col items-center gap-4 bg-gray-800 p-4 rounded-xl shadow-lg">
             <h1 class="text-2xl font-bold text-center">Live Pixel Canvas</h1>
+            <div id="placement-ui" class="hidden w-full p-3 bg-gray-700 rounded-lg text-center">
+                <p class="mb-2 text-sm">Place pixel at (<span id="pending-coords"></span>)?</p>
+                <div class="flex justify-center gap-2">
+                    <button id="confirm-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">Confirm</button>
+                    <button id="cancel-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-md">Cancel</button>
+                </div>
+            </div>
+            <div id="cooldown-timer" class="w-full p-3 bg-blue-800 rounded-lg text-center hidden">
+                Next pixel in <span id="cooldown-seconds">10</span>s
+            </div>
             <p class="text-sm text-gray-400 text-center">Drag/Scroll to Pan/Zoom. Hold 'F' to draw.</p>
             <div id="color-palette" class="grid grid-cols-8 sm:grid-cols-5 gap-2"></div>
             <button id="eraser" class="eraser w-full py-3 px-4 bg-gray-700 hover:bg-gray-600 rounded-lg text-lg font-semibold transition-all duration-200 flex items-center justify-center gap-2">
@@ -94,16 +105,17 @@
         const SUPER_ADMIN_UID = "5ECFbV0p1QTMDxOjbalkPMdEl2m1";
         const GRID_WIDTH = 100, GRID_HEIGHT = 76;
         const USERS_COLLECTION_NAME = 'users', PIXEL_COLLECTION_NAME = 'pixels', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', ADMINS_COLLECTION_NAME = 'admins';
+        const PIXEL_COOLDOWN_S = 10;
         const COLORS = ['#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000', '#FF4500', '#FFA800', '#FFD635', '#00A368', '#7EED56', '#2450A4', '#3690EA', '#51E9F4', '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'];
         
-        let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval;
-        let viewedUserId = null;
+        let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval, isAdmin = false;
+        let viewedUserId = null, pendingPixel = null, lastPlacementTime = 0, cooldownInterval;
         let isFreeDrawing = false, isAdminBrushActive = false;
         let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
         const DRAG_THRESHOLD = 5;
 
         const ui = {
-            viewport: document.getElementById('canvas-viewport'), grid: document.getElementById('pixel-grid'), colorPalette: document.getElementById('color-palette'), eraserButton: document.getElementById('eraser'), userDisplay: document.getElementById('user-display'), loadingOverlay: document.getElementById('loading-overlay'), loginContainer: document.getElementById('login-container'), appContainer: document.getElementById('app-container'), googleLoginBtn: document.getElementById('google-login-btn'), errorNotice: document.getElementById('error-notice'), logoutBtn: document.getElementById('logout-btn'), bannedContainer: document.getElementById('banned-container'), adminBtn: document.getElementById('admin-btn'), viewModeNotice: document.getElementById('view-mode-notice'), viewModeText: document.getElementById('view-mode-text'), controlsPanel: document.getElementById('controls-panel')
+            viewport: document.getElementById('canvas-viewport'), grid: document.getElementById('pixel-grid'), colorPalette: document.getElementById('color-palette'), eraserButton: document.getElementById('eraser'), userDisplay: document.getElementById('user-display'), loadingOverlay: document.getElementById('loading-overlay'), loginContainer: document.getElementById('login-container'), appContainer: document.getElementById('app-container'), googleLoginBtn: document.getElementById('google-login-btn'), errorNotice: document.getElementById('error-notice'), logoutBtn: document.getElementById('logout-btn'), bannedContainer: document.getElementById('banned-container'), adminBtn: document.getElementById('admin-btn'), viewModeNotice: document.getElementById('view-mode-notice'), viewModeText: document.getElementById('view-mode-text'), controlsPanel: document.getElementById('controls-panel'), placementUI: document.getElementById('placement-ui'), pendingCoords: document.getElementById('pending-coords'), confirmBtn: document.getElementById('confirm-btn'), cancelBtn: document.getElementById('cancel-btn'), cooldownTimer: document.getElementById('cooldown-timer'), cooldownSeconds: document.getElementById('cooldown-seconds')
         };
         
         function checkUrlParams() {
@@ -128,7 +140,7 @@
                     if (presenceInterval) clearInterval(presenceInterval);
 
                     if (user) {
-                        const [isBanned, isAdmin] = await Promise.all([checkBanStatus(user.uid), checkAdminStatus(user.uid)]);
+                        [isBanned, isAdmin] = await Promise.all([checkBanStatus(user.uid), checkAdminStatus(user.uid)]);
                         
                         if (isBanned) {
                             showBannedMessage();
@@ -136,7 +148,7 @@
                         }
                         
                         updateUserPresence(user);
-                        presenceInterval = setInterval(() => updateUserPresence(user), 60000); // Update presence every minute
+                        presenceInterval = setInterval(() => updateUserPresence(user), 60000);
 
                         if (isAdmin) ui.adminBtn.classList.remove('hidden');
                         else ui.adminBtn.classList.add('hidden');
@@ -144,7 +156,6 @@
                         userId = user.uid;
                         ui.userDisplay.textContent = user.displayName || user.email;
                         ui.loginContainer.classList.add('hidden');
-                        ui.appContainer.classList.remove('hidden');
                         ui.appContainer.classList.add('flex');
                         ui.logoutBtn.classList.remove('hidden');
 
@@ -154,6 +165,7 @@
                         }
                     } else {
                         userId = null;
+                        isAdmin = false;
                         ui.appContainer.classList.add('hidden');
                         ui.loginContainer.classList.remove('hidden');
                         ui.logoutBtn.classList.add('hidden');
@@ -164,6 +176,8 @@
 
                 ui.googleLoginBtn.addEventListener('click', handleGoogleLogin);
                 ui.logoutBtn.addEventListener('click', () => signOut(auth));
+                ui.confirmBtn.addEventListener('click', confirmPlacement);
+                ui.cancelBtn.addEventListener('click', cancelPlacement);
 
             } catch (error) {
                 console.error("Firebase Initialization Error:", error);
@@ -173,16 +187,7 @@
 
         async function updateUserPresence(user) {
             const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, user.uid);
-            try {
-                await setDoc(userDocRef, {
-                    uid: user.uid,
-                    displayName: user.displayName,
-                    email: user.email,
-                    lastSeen: serverTimestamp()
-                }, { merge: true });
-            } catch (error) {
-                console.error("Error updating user presence:", error);
-            }
+            await setDoc(userDocRef, { uid: user.uid, displayName: user.displayName, email: user.email, lastSeen: serverTimestamp() }, { merge: true });
         }
 
         async function checkAdminStatus(uid) {
@@ -217,10 +222,7 @@
 
         async function handleGoogleLogin() {
             try { await signInWithPopup(auth, new GoogleAuthProvider()); } 
-            catch (error) {
-                console.error("Google Sign-In Error:", error);
-                showError("Sign-in failed. Check console for details & enable popups.");
-            }
+            catch (error) { console.error("Google Sign-In Error:", error); showError("Sign-in failed. Check console & enable popups."); }
         }
 
         function setupApp() {
@@ -248,10 +250,14 @@
         }
 
         function centerCanvas() {
-            const viewportRect = ui.viewport.getBoundingClientRect(), gridRect = ui.grid.getBoundingClientRect();
-            scale = Math.min(viewportRect.width / gridRect.width, viewportRect.height / gridRect.height) * 0.9;
-            panX = (viewportRect.width - gridRect.width * scale) / 2;
-            panY = (viewportRect.height - gridRect.height * scale) / 2;
+            const viewportRect = ui.viewport.getBoundingClientRect();
+            // Calculate scale to fit the entire grid with a small margin
+            const scaleX = viewportRect.width / (GRID_WIDTH * 15);
+            const scaleY = viewportRect.height / (GRID_HEIGHT * 15);
+            scale = Math.min(scaleX, scaleY) * 0.9;
+            // Center the canvas
+            panX = (viewportRect.width - (GRID_WIDTH * 15 * scale)) / 2;
+            panY = (viewportRect.height - (GRID_HEIGHT * 15 * scale)) / 2;
             updateTransform();
         }
 
@@ -276,15 +282,13 @@
             window.addEventListener('mousemove', onPanMove);
             window.addEventListener('mouseup', onPanEnd);
             ui.viewport.addEventListener('wheel', onZoom, { passive: false });
-             // Touch events for mobile pan/zoom
             ui.viewport.addEventListener('touchstart', onPanStart, { passive: false });
             window.addEventListener('touchmove', onPanMove, { passive: false });
             window.addEventListener('touchend', onPanEnd);
         }
 
         function setupEventListeners() {
-            setupPanZoomListeners(); // Pan and zoom is always active
-            
+            setupPanZoomListeners();
             ui.colorPalette.addEventListener('click', e => {
                 const swatch = e.target.closest('.color-swatch');
                 if (!swatch) return;
@@ -292,44 +296,14 @@
                 isErasing = false;
                 updateSelectedToolUI();
             });
-            ui.eraserButton.addEventListener('click', () => {
-                isErasing = !isErasing;
-                updateSelectedToolUI();
-            });
-            window.addEventListener('keydown', e => { 
-                if (e.key.toLowerCase() === 'f') isFreeDrawing = true; 
-                if (e.key.toLowerCase() === 'e' && !ui.adminBtn.classList.contains('hidden')) isAdminBrushActive = true;
-            });
-            window.addEventListener('keyup', e => { 
-                if (e.key.toLowerCase() === 'f') isFreeDrawing = false; 
-                if (e.key.toLowerCase() === 'e') isAdminBrushActive = false;
-            });
-            ui.grid.addEventListener('mousemove', e => {
-                if (isPanning) return;
-                const pixel = e.target.closest('.pixel');
-                if (!pixel || !userId) return;
-                const x = parseInt(pixel.dataset.x), y = parseInt(pixel.dataset.y);
-
-                if (isFreeDrawing) {
-                    if (isErasing) deletePixel(x, y);
-                    else placePixel(x, y, selectedColor);
-                } else if (isAdminBrushActive) {
-                    deletePixelArea(x, y, 5); // 5x5 brush size
-                }
-            });
+            ui.eraserButton.addEventListener('click', () => { isErasing = !isErasing; updateSelectedToolUI(); });
+            window.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = true; if (e.key.toLowerCase() === 'e' && isAdmin) isAdminBrushActive = true; });
+            window.addEventListener('keyup', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = false; if (e.key.toLowerCase() === 'e') isAdminBrushActive = false; });
+            ui.grid.addEventListener('mousemove', e => { if (isPanning || !isFreeDrawing) return; const pixel = e.target.closest('.pixel'); if (pixel) initiatePlacement(parseInt(pixel.dataset.x), parseInt(pixel.dataset.y), true); });
         }
         
-        function deletePixelArea(centerX, centerY, size) {
-            const startX = Math.max(0, centerX - Math.floor(size / 2)), endX = Math.min(GRID_WIDTH - 1, centerX + Math.floor(size / 2));
-            const startY = Math.max(0, centerY - Math.floor(size / 2)), endY = Math.min(GRID_HEIGHT - 1, centerY + Math.floor(size / 2));
-            for (let y = startY; y <= endY; y++) for (let x = startX; x <= endX; x++) deletePixel(x, y);
-        }
-
         function getEventCoords(e) {
-            if (e.touches) {
-                return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
-            }
-            return { clientX: e.clientX, clientY: e.clientY };
+            return e.touches ? { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY } : { clientX: e.clientX, clientY: e.clientY };
         }
 
         function onPanStart(e) {
@@ -351,10 +325,9 @@
             isPanning = false; ui.viewport.classList.remove('panning');
             const endCoords = e.changedTouches ? e.changedTouches[0] : e;
             if (Math.hypot(endCoords.clientX - mousedownX, endCoords.clientY - mousedownY) < DRAG_THRESHOLD && !viewedUserId) {
-                const pixel = e.target.closest('.pixel');
-                if (pixel && userId) {
-                    const x = parseInt(pixel.dataset.x), y = parseInt(pixel.dataset.y);
-                    if (isErasing) deletePixel(x, y); else placePixel(x, y, selectedColor);
+                const pixel = document.elementFromPoint(endCoords.clientX, endCoords.clientY);
+                if (pixel && pixel.classList.contains('pixel')) {
+                    initiatePlacement(parseInt(pixel.dataset.x), parseInt(pixel.dataset.y));
                 }
             }
         }
@@ -369,14 +342,87 @@
             panY = mouseY - (mouseY - panY) * (e.deltaY > 0 ? 1/zoomFactor : zoomFactor);
             updateTransform();
         }
+
+        function startCooldown() {
+            if (isAdmin) return;
+            lastPlacementTime = Date.now();
+            ui.cooldownTimer.classList.remove('hidden');
+            let secondsLeft = PIXEL_COOLDOWN_S;
+            ui.cooldownSeconds.textContent = secondsLeft;
+            cooldownInterval = setInterval(() => {
+                secondsLeft--;
+                ui.cooldownSeconds.textContent = secondsLeft;
+                if (secondsLeft <= 0) {
+                    clearInterval(cooldownInterval);
+                    ui.cooldownTimer.classList.add('hidden');
+                }
+            }, 1000);
+        }
+        
+        function initiatePlacement(x, y, isAutoConfirm = false) {
+            if (!userId || viewedUserId) return;
+            const timeSinceLast = Date.now() - lastPlacementTime;
+            if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
+                if (!ui.cooldownTimer.classList.contains('hidden')) return; // Avoid re-triggering while visible
+                const secondsLeft = Math.ceil((PIXEL_COOLDOWN_S * 1000 - timeSinceLast) / 1000);
+                ui.cooldownSeconds.textContent = secondsLeft;
+                ui.cooldownTimer.classList.remove('hidden');
+                return;
+            }
+            if (pendingPixel) cancelPlacement();
+            
+            const pixelEl = document.getElementById(`pixel-${x}-${y}`);
+            if (!pixelEl) return;
+            
+            pendingPixel = { x, y, color: isErasing ? null : selectedColor, originalColor: pixelEl.style.backgroundColor };
+            pixelEl.style.backgroundColor = isErasing ? '#4a5568' : selectedColor;
+            pixelEl.classList.add('pending');
+
+            if (isAutoConfirm && isAdmin) {
+                confirmPlacement();
+            } else if (isAutoConfirm && !isAdmin) {
+                // For regular users with free-draw, we still respect cooldown but auto-confirm.
+                confirmPlacement();
+            }
+             else {
+                ui.pendingCoords.textContent = `${x}, ${y}`;
+                ui.placementUI.classList.remove('hidden');
+            }
+        }
+        
+        function confirmPlacement() {
+            if (!pendingPixel) return;
+            const { x, y, color } = pendingPixel;
+            if (color === null) deletePixel(x, y);
+            else placePixel(x, y, color);
+            
+            startCooldown();
+            
+            const pixelEl = document.getElementById(`pixel-${x}-${y}`);
+            if(pixelEl) pixelEl.classList.remove('pending');
+
+            pendingPixel = null;
+            ui.placementUI.classList.add('hidden');
+        }
+
+        function cancelPlacement() {
+            if (!pendingPixel) return;
+            const { x, y, originalColor } = pendingPixel;
+            const pixelEl = document.getElementById(`pixel-${x}-${y}`);
+            if(pixelEl) {
+                pixelEl.style.backgroundColor = originalColor;
+                pixelEl.classList.remove('pending');
+            }
+            pendingPixel = null;
+            ui.placementUI.classList.add('hidden');
+        }
         
         function updateSelectedToolUI() {
             document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
             if (isErasing) ui.eraserButton.classList.add('selected');
             else {
                 ui.eraserButton.classList.remove('selected');
-                const activeSwatch = document.querySelector(`.color-swatch[data-color="${selectedColor}"]`);
-                if (activeSwatch) activeSwatch.classList.add('selected');
+                document.querySelector(`.color-swatch[data-color="${selectedColor}"]`)?.classList.add('selected');
             }
         }
 
@@ -403,15 +449,15 @@
                     const isViewedUserPixel = data.userId === viewedUserId;
 
                     if (change.type === "added" || change.type === "modified") {
-                        pixelElement.style.backgroundColor = data.color;
-                        if (viewedUserId) {
-                             pixelElement.classList.toggle('other-user', !isViewedUserPixel);
+                        if (pendingPixel && pendingPixel.x === data.x && pendingPixel.y === data.y) {
+                           // Don't update the pending pixel from firestore, it will be handled by confirm/cancel
+                        } else {
+                           pixelElement.style.backgroundColor = data.color;
                         }
+                        if (viewedUserId) pixelElement.classList.toggle('other-user', !isViewedUserPixel);
                     } else if (change.type === "removed") {
                         pixelElement.style.backgroundColor = '#4a5568';
-                        if (viewedUserId) {
-                            pixelElement.classList.remove('other-user');
-                        }
+                        if (viewedUserId) pixelElement.classList.remove('other-user');
                     }
                 });
             }, error => console.error("Error listening to pixel changes:", error));
