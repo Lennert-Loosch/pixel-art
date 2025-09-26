@@ -45,10 +45,10 @@
             </div>
         </div>
 
-        <div id="tabs-container" class="mb-6 flex border-b border-gray-700">
-            <button data-tab="users" class="tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white">User Management</button>
-            <button data-tab="admins" id="admin-management-tab" class="hidden tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white">Admin Management</button>
-            <button data-tab="canvas" id="canvas-management-tab" class="hidden tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white">Canvas Management</button>
+        <div id="tabs-container" class="mb-6 flex border-b border-gray-700 overflow-x-auto">
+            <button data-tab="users" class="tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white flex-shrink-0">User Management</button>
+            <button data-tab="admins" id="admin-management-tab" class="hidden tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white flex-shrink-0">Admin Management</button>
+            <button data-tab="canvas" id="canvas-management-tab" class="hidden tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white flex-shrink-0">Canvas Management</button>
         </div>
 
         <!-- User Management Tab -->
@@ -92,7 +92,7 @@
 
         const SUPER_ADMIN_UID = "5ECFbV0p1QTMDxOjbalkPMdEl2m1";
         const USERS_COLLECTION_NAME = 'users', ADMINS_COLLECTION_NAME = 'admins', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', PIXEL_COLLECTION_NAME = 'pixels';
-        const ONLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+        const ONLINE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
 
         let db, auth;
         let currentUserRole = null; // null, 'regular', or 'super'
@@ -207,25 +207,30 @@
                  return;
             }
 
+            usersToDisplay.sort((a,b) => (b.lastSeen?.toMillis() || 0) - (a.lastSeen?.toMillis() || 0));
+
             usersToDisplay.forEach(user => {
                 const userElement = document.createElement('div');
                 userElement.className = 'flex flex-wrap items-center justify-between bg-gray-700 p-3 rounded-md gap-2';
                 
-                const isOnline = user.lastSeen && (new Date() - user.lastSeen.toDate()) < ONLINE_THRESHOLD_MS;
-                const onlineIndicator = `<div class="${isOnline ? 'online-indicator' : 'offline-indicator'}"></div>`;
+                const isOnline = user.lastSeen && user.lastSeen.toDate && (new Date() - user.lastSeen.toDate()) < ONLINE_THRESHOLD_MS;
+                const onlineIndicator = `<div class="${isOnline ? 'online-indicator' : 'offline-indicator'}" title="${isOnline ? 'Online' : 'Offline'}"></div>`;
 
                 let buttons = `
-                    <a href="./index.html?viewUser=${user.uid}" target="_blank" class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold py-1 px-3 rounded-md">View Pixels</a>
-                    <button data-uid="${user.uid}" class="${user.isBanned ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-red-600 hover:bg-red-700'} text-white text-sm font-bold py-1 px-3 rounded-md toggle-ban-btn">
-                        ${user.isBanned ? 'Unban' : 'Ban'}
-                    </button>
+                    <a href="./index.html?viewUser=${user.uid}" class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold py-1 px-3 rounded-md">View Pixels</a>
                 `;
 
-                if (currentUserRole === 'super' && !user.isAdmin) {
-                    buttons += `<button data-uid="${user.uid}" class="bg-green-500 hover:bg-green-600 text-white text-sm font-bold py-1 px-3 rounded-md promote-admin-btn">Promote</button>`;
+                if (user.uid !== SUPER_ADMIN_UID) { // Super admin cannot be banned/promoted
+                    buttons += `<button data-uid="${user.uid}" class="${user.isBanned ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-red-600 hover:bg-red-700'} text-white text-sm font-bold py-1 px-3 rounded-md toggle-ban-btn">
+                        ${user.isBanned ? 'Unban' : 'Ban'}
+                    </button>`;
+                    
+                    if (currentUserRole === 'super' && !user.isAdmin) {
+                        buttons += `<button data-uid="${user.uid}" class="bg-green-500 hover:bg-green-600 text-white text-sm font-bold py-1 px-3 rounded-md promote-admin-btn">Promote</button>`;
+                    }
                 }
                 
-                let roleBadge = user.isAdmin ? `<span class="text-xs font-bold uppercase text-yellow-400">Admin</span>` : '';
+                let roleBadge = user.isAdmin ? `<span class="text-xs font-bold uppercase ${user.uid === SUPER_ADMIN_UID ? 'text-red-400' : 'text-yellow-400'}">${user.uid === SUPER_ADMIN_UID ? 'Super Admin' : 'Admin'}</span>` : '';
 
                 userElement.innerHTML = `
                     <div class="flex-grow min-w-0">
@@ -236,7 +241,7 @@
                         </div>
                         <span class="font-mono text-xs text-gray-400 break-all">${user.uid}</span>
                     </div>
-                    <div class="flex gap-2 flex-shrink-0">${!user.isAdmin ? buttons : ''}</div>
+                    <div class="flex gap-2 flex-shrink-0">${buttons}</div>
                 `;
                 ui.userListContainer.appendChild(userElement);
             });
