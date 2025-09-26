@@ -11,6 +11,8 @@
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .tab { transition: all 0.2s ease-in-out; }
         .tab.active { border-color: #63b3ed; background-color: #2b6cb0; }
+        .online-indicator { width: 10px; height: 10px; border-radius: 50%; background-color: #4ade80; box-shadow: 0 0 5px #4ade80; }
+        .offline-indicator { width: 10px; height: 10px; border-radius: 50%; background-color: #9ca3af; }
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -33,7 +35,10 @@
 
     <div id="admin-dashboard" class="hidden w-full max-w-6xl mx-auto">
         <div class="flex flex-wrap justify-between items-center mb-6 gap-4">
-            <h1 class="text-3xl font-bold">Admin Dashboard</h1>
+            <div class="flex items-center gap-4">
+                 <h1 class="text-3xl font-bold">Admin Dashboard</h1>
+                 <a href="./index.html" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg">Back to Canvas</a>
+            </div>
             <div class="flex items-center gap-2">
                 <span id="welcome-message" class="text-gray-400"></span>
                 <button id="admin-logout-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2">Logout</button>
@@ -50,7 +55,7 @@
         <div id="users-tab-content" class="tab-content hidden">
             <div class="bg-gray-800 p-6 rounded-lg">
                 <h2 class="text-2xl font-semibold mb-4">Users</h2>
-                <input type="text" id="user-search" placeholder="Search by User ID..." class="w-full bg-gray-700 text-white rounded-md px-4 py-2 mb-4 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input type="text" id="user-search" placeholder="Search by Username or User ID..." class="w-full bg-gray-700 text-white rounded-md px-4 py-2 mb-4 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <div id="user-list" class="space-y-3 max-h-[60vh] overflow-y-auto"></div>
             </div>
         </div>
@@ -86,32 +91,17 @@
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {"apiKey":"AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4","authDomain":"pixel-ed9f4.firebaseapp.com","projectId":"pixel-ed9f4","storageBucket":"pixel-ed9f4.appspot.com","messagingSenderId":"61835815357","appId":"1:61835815357:web:579d025b165c1edcbc8ad4"};
 
         const SUPER_ADMIN_UID = "5ECFbV0p1QTMDxOjbalkPMdEl2m1";
-        const ADMINS_COLLECTION_NAME = 'admins';
-        const BANNED_USERS_COLLECTION_NAME = 'bannedUsers';
-        const PIXEL_COLLECTION_NAME = 'pixels';
+        const USERS_COLLECTION_NAME = 'users', ADMINS_COLLECTION_NAME = 'admins', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', PIXEL_COLLECTION_NAME = 'pixels';
+        const ONLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
         let db, auth;
         let currentUserRole = null; // null, 'regular', or 'super'
         let allUsers = new Map(); // For caching user data
 
-        const loadingOverlay = document.getElementById('loading-overlay');
-        const accessDenied = document.getElementById('access-denied');
-        const adminDashboard = document.getElementById('admin-dashboard');
-        const adminLoginBtn = document.getElementById('admin-login-btn');
-        const adminLogoutBtn = document.getElementById('admin-logout-btn');
-        const userListContainer = document.getElementById('user-list');
-        const adminListContainer = document.getElementById('admin-list');
-        const addAdminUidInput = document.getElementById('add-admin-uid');
-        const addAdminBtn = document.getElementById('add-admin-btn');
-        const adminManagementTab = document.getElementById('admin-management-tab');
-        const canvasManagementTab = document.getElementById('canvas-management-tab');
-        const clearCanvasBtn = document.getElementById('clear-canvas-btn');
-        const userSearchInput = document.getElementById('user-search');
-        const welcomeMessage = document.getElementById('welcome-message');
+        const ui = {
+            loadingOverlay: document.getElementById('loading-overlay'), accessDenied: document.getElementById('access-denied'), adminDashboard: document.getElementById('admin-dashboard'), adminLoginBtn: document.getElementById('admin-login-btn'), adminLogoutBtn: document.getElementById('admin-logout-btn'), userListContainer: document.getElementById('user-list'), adminListContainer: document.getElementById('admin-list'), addAdminUidInput: document.getElementById('add-admin-uid'), addAdminBtn: document.getElementById('add-admin-btn'), adminManagementTab: document.getElementById('admin-management-tab'), canvasManagementTab: document.getElementById('canvas-management-tab'), clearCanvasBtn: document.getElementById('clear-canvas-btn'), userSearchInput: document.getElementById('user-search'), welcomeMessage: document.getElementById('welcome-message'), tabs: document.querySelectorAll('.tab'), tabContents: document.querySelectorAll('.tab-content')
+        };
         
-        const tabs = document.querySelectorAll('.tab');
-        const tabContents = document.querySelectorAll('.tab-content');
-
         async function initialize() {
             try {
                 const app = initializeApp(firebaseConfig);
@@ -119,39 +109,38 @@
                 auth = getAuth(app);
 
                 onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        await checkUserRole(user);
-                    } else {
+                    ui.loadingOverlay.classList.add('hidden');
+                    if (user) await checkUserRole(user);
+                    else {
                         currentUserRole = null;
                         showAccessDenied();
                     }
-                    loadingOverlay.classList.add('hidden');
                 });
 
-                adminLoginBtn.addEventListener('click', () => signInWithPopup(auth, new GoogleAuthProvider()));
-                adminLogoutBtn.addEventListener('click', () => signOut(auth));
-                addAdminBtn.addEventListener('click', addAdmin);
-                clearCanvasBtn.addEventListener('click', clearCanvas);
-                userSearchInput.addEventListener('input', renderUserList);
+                ui.adminLoginBtn.addEventListener('click', () => signInWithPopup(auth, new GoogleAuthProvider()));
+                ui.adminLogoutBtn.addEventListener('click', () => signOut(auth));
+                ui.addAdminBtn.addEventListener('click', addAdmin);
+                ui.clearCanvasBtn.addEventListener('click', clearCanvas);
+                ui.userSearchInput.addEventListener('input', renderUserList);
                 setupTabs();
 
             } catch (error) {
                 console.error("Initialization Error:", error);
-                loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
+                ui.loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
             }
         }
 
         function setupTabs() {
-            tabs.forEach(tab => tab.addEventListener('click', () => {
-                tabs.forEach(t => t.classList.remove('active'));
+            ui.tabs.forEach(tab => tab.addEventListener('click', () => {
+                ui.tabs.forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
-                tabContents.forEach(content => content.id === `${tab.dataset.tab}-tab-content` ? content.classList.remove('hidden') : content.classList.add('hidden'));
+                ui.tabContents.forEach(content => content.id === `${tab.dataset.tab}-tab-content` ? content.classList.remove('hidden') : content.classList.add('hidden'));
             }));
-            tabs[0].click(); // Default to first tab
+            ui.tabs[0].click();
         }
 
         async function checkUserRole(user) {
-            welcomeMessage.textContent = `Welcome, ${user.displayName || 'Admin'}`;
+            ui.welcomeMessage.textContent = `Welcome, ${user.displayName || 'Admin'}`;
             if (user.uid === SUPER_ADMIN_UID) {
                 currentUserRole = 'super';
                 showDashboard();
@@ -164,60 +153,57 @@
         }
         
         function showAccessDenied() {
-            adminDashboard.classList.add('hidden');
-            accessDenied.classList.remove('hidden');
+            ui.adminDashboard.classList.add('hidden');
+            ui.accessDenied.classList.remove('hidden');
         }
 
         function showDashboard() {
-            accessDenied.classList.add('hidden');
-            adminDashboard.classList.remove('hidden');
+            ui.accessDenied.classList.add('hidden');
+            ui.adminDashboard.classList.remove('hidden');
             
             if (currentUserRole === 'super') {
-                adminManagementTab.classList.remove('hidden');
-                canvasManagementTab.classList.remove('hidden');
+                ui.adminManagementTab.classList.remove('hidden');
+                ui.canvasManagementTab.classList.remove('hidden');
                 loadAdminList();
             } else {
-                adminManagementTab.classList.add('hidden');
-                canvasManagementTab.classList.add('hidden');
+                ui.adminManagementTab.classList.add('hidden');
+                ui.canvasManagementTab.classList.add('hidden');
             }
-            fetchAllUsers();
+            listenForUserChanges();
         }
         
-        async function fetchAllUsers() {
-            const pixelsCollection = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
-            const adminsCollection = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
-            const bannedCollection = collection(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`);
+        function listenForUserChanges() {
+            const usersRef = collection(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`);
+            const adminsRef = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
+            const bannedRef = collection(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`);
 
-            const [pixelSnapshot, adminSnapshot, bannedSnapshot] = await Promise.all([
-                getDocs(pixelsCollection), getDocs(adminsCollection), getDocs(bannedCollection)
-            ]);
-            
-            const adminIds = new Set(adminSnapshot.docs.map(d => d.id));
-            adminIds.add(SUPER_ADMIN_UID);
-            const bannedIds = new Set(bannedSnapshot.docs.map(d => d.id));
-
-            allUsers.clear();
-            pixelSnapshot.forEach(doc => {
-                const data = doc.data();
-                if (data.userId && !allUsers.has(data.userId)) {
-                    allUsers.set(data.userId, { 
-                        uid: data.userId, 
-                        isAdmin: adminIds.has(data.userId), 
-                        isBanned: bannedIds.has(data.userId) 
-                    });
-                }
+            onSnapshot(usersRef, (snapshot) => {
+                snapshot.docs.forEach(d => allUsers.set(d.id, { ...allUsers.get(d.id), ...d.data() }));
+                renderUserList();
             });
-            renderUserList();
+            onSnapshot(adminsRef, (snapshot) => {
+                const adminIds = new Set(snapshot.docs.map(d => d.id));
+                allUsers.forEach(user => user.isAdmin = adminIds.has(user.uid) || user.uid === SUPER_ADMIN_UID);
+                renderUserList();
+            });
+            onSnapshot(bannedRef, (snapshot) => {
+                const bannedIds = new Set(snapshot.docs.map(d => d.id));
+                allUsers.forEach(user => user.isBanned = bannedIds.has(user.uid));
+                renderUserList();
+            });
         }
-        
-        function renderUserList() {
-            const searchTerm = userSearchInput.value.toLowerCase();
-            userListContainer.innerHTML = '';
-            
-            const usersToDisplay = Array.from(allUsers.values()).filter(user => user.uid.toLowerCase().includes(searchTerm));
 
+        function renderUserList() {
+            const searchTerm = ui.userSearchInput.value.toLowerCase();
+            ui.userListContainer.innerHTML = '';
+            
+            const usersToDisplay = Array.from(allUsers.values()).filter(user => 
+                (user.uid && user.uid.toLowerCase().includes(searchTerm)) || 
+                (user.displayName && user.displayName.toLowerCase().includes(searchTerm))
+            );
+            
             if (usersToDisplay.length === 0) {
-                 userListContainer.innerHTML = `<p class="text-gray-500">No users found.</p>`;
+                 ui.userListContainer.innerHTML = `<p class="text-gray-500">No users found.</p>`;
                  return;
             }
 
@@ -225,8 +211,11 @@
                 const userElement = document.createElement('div');
                 userElement.className = 'flex flex-wrap items-center justify-between bg-gray-700 p-3 rounded-md gap-2';
                 
+                const isOnline = user.lastSeen && (new Date() - user.lastSeen.toDate()) < ONLINE_THRESHOLD_MS;
+                const onlineIndicator = `<div class="${isOnline ? 'online-indicator' : 'offline-indicator'}"></div>`;
+
                 let buttons = `
-                    <button data-uid="${user.uid}" class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold py-1 px-3 rounded-md view-pixels-btn">View Pixels</button>
+                    <a href="./index.html?viewUser=${user.uid}" target="_blank" class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold py-1 px-3 rounded-md">View Pixels</a>
                     <button data-uid="${user.uid}" class="${user.isBanned ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-red-600 hover:bg-red-700'} text-white text-sm font-bold py-1 px-3 rounded-md toggle-ban-btn">
                         ${user.isBanned ? 'Unban' : 'Ban'}
                     </button>
@@ -239,30 +228,41 @@
                 let roleBadge = user.isAdmin ? `<span class="text-xs font-bold uppercase text-yellow-400">Admin</span>` : '';
 
                 userElement.innerHTML = `
-                    <div class="flex-grow min-w-0"><span class="font-mono text-sm break-all">${user.uid}</span> ${roleBadge}</div>
+                    <div class="flex-grow min-w-0">
+                        <div class="flex items-center gap-2">
+                            ${onlineIndicator}
+                            <span class="font-semibold">${user.displayName || 'Unknown User'}</span>
+                            ${roleBadge}
+                        </div>
+                        <span class="font-mono text-xs text-gray-400 break-all">${user.uid}</span>
+                    </div>
                     <div class="flex gap-2 flex-shrink-0">${!user.isAdmin ? buttons : ''}</div>
                 `;
-                userListContainer.appendChild(userElement);
+                ui.userListContainer.appendChild(userElement);
             });
             
             document.querySelectorAll('.toggle-ban-btn').forEach(b => b.addEventListener('click', toggleBan));
             document.querySelectorAll('.promote-admin-btn').forEach(b => b.addEventListener('click', promoteToAdmin));
         }
 
-
         async function loadAdminList() {
             if (currentUserRole !== 'super') return;
-            const adminsCollection = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
-            onSnapshot(adminsCollection, (snapshot) => {
-                adminListContainer.innerHTML = '';
+            const adminsRef = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
+            onSnapshot(adminsRef, (snapshot) => {
+                ui.adminListContainer.innerHTML = '';
                 snapshot.forEach(doc => {
+                    const adminData = allUsers.get(doc.id);
+                    const displayName = adminData ? adminData.displayName : 'Unknown Admin';
                     const adminElement = document.createElement('div');
                     adminElement.className = 'flex items-center justify-between bg-gray-700 p-3 rounded-md';
                     adminElement.innerHTML = `
-                        <span class="font-mono text-sm">${doc.id}</span>
+                        <div>
+                            <div class="font-semibold">${displayName}</div>
+                            <span class="font-mono text-xs text-gray-400">${doc.id}</span>
+                        </div>
                         <button data-uid="${doc.id}" class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-1 px-3 rounded-md remove-admin-btn">Remove</button>
                     `;
-                    adminListContainer.appendChild(adminElement);
+                    ui.adminListContainer.appendChild(adminElement);
                 });
                 document.querySelectorAll('.remove-admin-btn').forEach(b => b.addEventListener('click', removeAdmin));
             });
@@ -271,32 +271,28 @@
         async function promoteToAdmin(e) {
             if (currentUserRole !== 'super') return;
             const uid = e.target.dataset.uid;
-            if (confirm(`Are you sure you want to promote ${uid} to a regular admin?`)) {
+            if (confirm(`Promote ${allUsers.get(uid)?.displayName || uid} to a regular admin?`)) {
                  const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
                  await setDoc(adminDocRef, { promotedAt: new Date(), promotedBy: auth.currentUser.uid });
-                 fetchAllUsers(); // Refresh list
             }
         }
 
         async function addAdmin() {
             if (currentUserRole !== 'super') return;
-            const uid = addAdminUidInput.value.trim();
+            const uid = ui.addAdminUidInput.value.trim();
             if (!uid) return alert("Please enter a User ID.");
             if (uid === SUPER_ADMIN_UID) return alert("Cannot modify super admin.");
-            
             const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
             await setDoc(adminDocRef, { addedAt: new Date(), addedBy: auth.currentUser.uid });
-            addAdminUidInput.value = '';
-            fetchAllUsers();
+            ui.addAdminUidInput.value = '';
         }
 
         async function removeAdmin(e) {
             if (currentUserRole !== 'super') return;
             const uid = e.target.dataset.uid;
-            if (confirm(`Are you sure you want to remove admin privileges for ${uid}?`)) {
+            if (confirm(`Remove admin privileges for ${allUsers.get(uid)?.displayName || uid}?`)) {
                 const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
                 await deleteDoc(adminDocRef);
-                fetchAllUsers();
             }
         }
         
@@ -304,31 +300,24 @@
             const uid = e.target.dataset.uid;
             const user = allUsers.get(uid);
             if (!user) return;
-            
             const banDocRef = doc(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`, uid);
             if (user.isBanned) {
-                if (confirm(`Are you sure you want to unban user ${uid}?`)) {
-                    await deleteDoc(banDocRef);
-                }
+                if (confirm(`Unban user ${user.displayName || uid}?`)) await deleteDoc(banDocRef);
             } else {
-                if (confirm(`Are you sure you want to ban user ${uid}?`)) {
-                    await setDoc(banDocRef, { bannedAt: new Date(), bannedBy: auth.currentUser.uid });
-                }
+                if (confirm(`Ban user ${user.displayName || uid}?`)) await setDoc(banDocRef, { bannedAt: new Date(), bannedBy: auth.currentUser.uid });
             }
-            fetchAllUsers();
         }
         
         async function clearCanvas() {
             if (currentUserRole !== 'super') return;
             if (!confirm("ARE YOU ABSOLUTELY SURE?\nThis will delete every pixel on the canvas permanently.")) return;
-            
-            loadingOverlay.classList.remove('hidden');
+            ui.loadingOverlay.classList.remove('hidden');
             const pixelsRef = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
             const snapshot = await getDocs(pixelsRef);
             const batch = writeBatch(db);
             snapshot.docs.forEach(d => batch.delete(d.ref));
             await batch.commit();
-            loadingOverlay.classList.add('hidden');
+            ui.loadingOverlay.classList.add('hidden');
             alert("Canvas has been cleared.");
         }
 

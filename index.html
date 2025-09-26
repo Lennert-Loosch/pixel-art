@@ -10,9 +10,9 @@
         .canvas-viewport { width: 95vmin; height: 76vmin; border: 2px solid #4a5568; background-color: #2d3748; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); overflow: hidden; cursor: grab; position: relative; }
         .canvas-viewport.panning { cursor: grabbing; }
         .pixel-grid { display: grid; grid-template-columns: repeat(100, 15px); grid-template-rows: repeat(76, 15px); transform-origin: 0 0; will-change: transform; }
-        .pixel { width: 15px; height: 15px; background-color: #4a5568; border: 1px solid #2d3748; transition: transform 0.1s ease-in-out, box-shadow 0.2s; }
+        .pixel { width: 15px; height: 15px; background-color: #4a5568; border: 1px solid #2d3748; transition: transform 0.1s ease-in-out, background-color 0.3s, opacity 0.3s; }
         .pixel:hover { transform: scale(1.2); z-index: 10; }
-        .pixel.highlight { box-shadow: 0 0 0 2px #facc15; z-index: 20; }
+        .pixel.other-user { opacity: 0.2; }
         .color-swatch { width: 40px; height: 40px; cursor: pointer; border: 3px solid transparent; transition: border-color 0.2s ease-in-out; }
         .color-swatch.selected, .eraser.selected { border-color: #63b3ed; box-shadow: 0 0 0 3px rgba(99, 179, 237, 0.5); }
         .eraser { border: 3px solid transparent; }
@@ -35,6 +35,11 @@
             Logout
         </button>
     </div>
+    
+    <div id="view-mode-notice" class="hidden fixed top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white py-2 px-5 rounded-lg shadow-lg z-20">
+       <!-- View mode message -->
+    </div>
+
 
     <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-80 flex flex-col items-center justify-center z-50 p-4">
         <div class="loader"></div>
@@ -65,7 +70,7 @@
         <div id="canvas-viewport" class="canvas-viewport rounded-lg">
             <div id="pixel-grid" class="pixel-grid"></div>
         </div>
-        <div class="flex flex-col items-center gap-6 bg-gray-800 p-6 rounded-xl shadow-lg">
+        <div id="controls-panel" class="flex flex-col items-center gap-6 bg-gray-800 p-6 rounded-xl shadow-lg">
             <h1 class="text-3xl font-bold text-center">Live Pixel Canvas</h1>
             <p class="text-sm text-gray-400 text-center">Drag to move. Scroll to zoom. Hold 'F' to draw.</p>
             <div id="color-palette" class="grid grid-cols-5 gap-3"></div>
@@ -82,39 +87,47 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, getDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'live-pixel-canvas';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {"apiKey":"AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4","authDomain":"pixel-ed9f4.firebaseapp.com","projectId":"pixel-ed9f4","storageBucket":"pixel-ed9f4.appspot.com","messagingSenderId":"61835815357","appId":"1:61835815357:web:579d025b165c1edcbc8ad4"};
         
         const SUPER_ADMIN_UID = "5ECFbV0p1QTMDxOjbalkPMdEl2m1";
         const GRID_WIDTH = 100, GRID_HEIGHT = 76;
-        const PIXEL_COLLECTION_NAME = 'pixels', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', ADMINS_COLLECTION_NAME = 'admins';
+        const USERS_COLLECTION_NAME = 'users', PIXEL_COLLECTION_NAME = 'pixels', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', ADMINS_COLLECTION_NAME = 'admins';
         const COLORS = ['#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000', '#FF4500', '#FFA800', '#FFD635', '#00A368', '#7EED56', '#2450A4', '#3690EA', '#51E9F4', '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'];
         
-        let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false;
+        let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval;
+        let viewedUserId = null;
         let isFreeDrawing = false, isAdminBrushActive = false;
         let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
         const DRAG_THRESHOLD = 5;
 
-        const viewport = document.getElementById('canvas-viewport'), grid = document.getElementById('pixel-grid'), colorPalette = document.getElementById('color-palette'), eraserButton = document.getElementById('eraser'), userDisplay = document.getElementById('user-display'), loadingOverlay = document.getElementById('loading-overlay'), loginContainer = document.getElementById('login-container'), appContainer = document.getElementById('app-container'), googleLoginBtn = document.getElementById('google-login-btn'), errorNotice = document.getElementById('error-notice'), logoutBtn = document.getElementById('logout-btn'), bannedContainer = document.getElementById('banned-container'), adminBtn = document.getElementById('admin-btn');
-
-        function hexToRgb(hex) {
-            if (!hex || typeof hex !== 'string') return null;
-            let shorthandRegex = /^#?([a-f\d])([a-f\d])([a-f\d])$/i;
-            hex = hex.replace(shorthandRegex, (m, r, g, b) => r + r + g + g + b + b);
-            let result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-            return result ? `rgb(${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)})` : null;
+        const ui = {
+            viewport: document.getElementById('canvas-viewport'), grid: document.getElementById('pixel-grid'), colorPalette: document.getElementById('color-palette'), eraserButton: document.getElementById('eraser'), userDisplay: document.getElementById('user-display'), loadingOverlay: document.getElementById('loading-overlay'), loginContainer: document.getElementById('login-container'), appContainer: document.getElementById('app-container'), googleLoginBtn: document.getElementById('google-login-btn'), errorNotice: document.getElementById('error-notice'), logoutBtn: document.getElementById('logout-btn'), bannedContainer: document.getElementById('banned-container'), adminBtn: document.getElementById('admin-btn'), viewModeNotice: document.getElementById('view-mode-notice'), controlsPanel: document.getElementById('controls-panel')
+        };
+        
+        function checkUrlParams() {
+            const urlParams = new URLSearchParams(window.location.search);
+            viewedUserId = urlParams.get('viewUser');
+            if (viewedUserId) {
+                ui.viewModeNotice.textContent = `Viewing pixels by user: ${viewedUserId.substring(0, 10)}...`;
+                ui.viewModeNotice.classList.remove('hidden');
+                ui.controlsPanel.classList.add('hidden');
+            }
         }
 
         async function initialize() {
+            checkUrlParams();
             try {
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
                 
                 onAuthStateChanged(auth, async (user) => {
-                    loadingOverlay.classList.add('hidden');
+                    ui.loadingOverlay.classList.add('hidden');
+                    if (presenceInterval) clearInterval(presenceInterval);
+
                     if (user) {
                         const [isBanned, isAdmin] = await Promise.all([checkBanStatus(user.uid), checkAdminStatus(user.uid)]);
                         
@@ -122,19 +135,19 @@
                             showBannedMessage();
                             return;
                         }
+                        
+                        updateUserPresence(user);
+                        presenceInterval = setInterval(() => updateUserPresence(user), 60000); // Update presence every minute
 
-                        if (isAdmin) {
-                            adminBtn.classList.remove('hidden');
-                        } else {
-                            adminBtn.classList.add('hidden');
-                        }
+                        if (isAdmin) ui.adminBtn.classList.remove('hidden');
+                        else ui.adminBtn.classList.add('hidden');
 
                         userId = user.uid;
-                        userDisplay.textContent = user.displayName || user.email;
-                        loginContainer.classList.add('hidden');
-                        appContainer.classList.remove('hidden');
-                        appContainer.classList.add('flex');
-                        logoutBtn.classList.remove('hidden');
+                        ui.userDisplay.textContent = user.displayName || user.email;
+                        ui.loginContainer.classList.add('hidden');
+                        ui.appContainer.classList.remove('hidden');
+                        ui.appContainer.classList.add('flex');
+                        ui.logoutBtn.classList.remove('hidden');
 
                         if (!isAppSetup) {
                             setupApp();
@@ -142,70 +155,70 @@
                         }
                     } else {
                         userId = null;
-                        appContainer.classList.add('hidden');
-                        appContainer.classList.remove('flex');
-                        loginContainer.classList.remove('hidden');
-                        loginContainer.classList.add('flex');
-                        logoutBtn.classList.add('hidden');
-                        adminBtn.classList.add('hidden');
-                        bannedContainer.classList.add('hidden');
+                        ui.appContainer.classList.add('hidden');
+                        ui.loginContainer.classList.remove('hidden');
+                        ui.logoutBtn.classList.add('hidden');
+                        ui.adminBtn.classList.add('hidden');
+                        ui.bannedContainer.classList.add('hidden');
                     }
                 });
 
-                googleLoginBtn.addEventListener('click', handleGoogleLogin);
-                logoutBtn.addEventListener('click', () => signOut(auth));
+                ui.googleLoginBtn.addEventListener('click', handleGoogleLogin);
+                ui.logoutBtn.addEventListener('click', () => signOut(auth));
 
             } catch (error) {
                 console.error("Firebase Initialization Error:", error);
-                loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
+                ui.loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
             }
         }
-        
+
+        async function updateUserPresence(user) {
+            const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, user.uid);
+            try {
+                await setDoc(userDocRef, {
+                    uid: user.uid,
+                    displayName: user.displayName,
+                    email: user.email,
+                    lastSeen: serverTimestamp()
+                }, { merge: true });
+            } catch (error) {
+                console.error("Error updating user presence:", error);
+            }
+        }
+
         async function checkAdminStatus(uid) {
              if (uid === SUPER_ADMIN_UID) return true;
-             try {
-                const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
-                const docSnap = await getDoc(adminDocRef);
-                return docSnap.exists();
-            } catch (error) {
-                console.error("Error checking admin status:", error);
-                return false;
-            }
+             const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
+             const docSnap = await getDoc(adminDocRef);
+             return docSnap.exists();
         }
 
         async function checkBanStatus(uid) {
-            try {
-                const banDocRef = doc(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`, uid);
-                const docSnap = await getDoc(banDocRef);
-                return docSnap.exists();
-            } catch (error) {
-                console.error("Error checking ban status:", error);
-                return false;
-            }
+            const banDocRef = doc(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`, uid);
+            const docSnap = await getDoc(banDocRef);
+            return docSnap.exists();
         }
 
         function showBannedMessage() {
-            loginContainer.classList.add('hidden');
-            appContainer.classList.add('hidden');
-            bannedContainer.classList.remove('hidden');
-            logoutBtn.classList.remove('hidden');
-            adminBtn.classList.add('hidden');
+            ui.loginContainer.classList.add('hidden');
+            ui.appContainer.classList.add('hidden');
+            ui.bannedContainer.classList.remove('hidden');
+            ui.logoutBtn.classList.remove('hidden');
+            ui.adminBtn.classList.add('hidden');
         }
         
         function showError(message) {
-            errorNotice.textContent = message;
-            errorNotice.classList.remove('hidden', 'opacity-0', '-translate-y-10');
+            ui.errorNotice.textContent = message;
+            ui.errorNotice.classList.remove('hidden', 'opacity-0', '-translate-y-10');
             setTimeout(() => {
-                errorNotice.classList.add('opacity-0', '-translate-y-10');
-                setTimeout(() => errorNotice.classList.add('hidden'), 500);
+                ui.errorNotice.classList.add('opacity-0', '-translate-y-10');
+                setTimeout(() => ui.errorNotice.classList.add('hidden'), 500);
             }, 5000);
         }
 
         async function handleGoogleLogin() {
-            const provider = new GoogleAuthProvider();
-            try {
-                await signInWithPopup(auth, provider);
-            } catch (error) {
+            try { await signInWithPopup(auth, new GoogleAuthProvider()); } 
+            catch (error) {
                 console.error("Google Sign-In Error:", error);
                 showError("Sign-in failed. Check console for details & enable popups.");
             }
@@ -213,26 +226,28 @@
 
         function setupApp() {
             createGrid();
-            createColorPalette();
-            setupEventListeners();
+            if (!viewedUserId) {
+                createColorPalette();
+                setupEventListeners();
+            }
             listenForPixelChanges();
             centerCanvas();
         }
 
         function createGrid() {
-            grid.innerHTML = '';
+            ui.grid.innerHTML = '';
             for (let y = 0; y < GRID_HEIGHT; y++) for (let x = 0; x < GRID_WIDTH; x++) {
                 const pixel = document.createElement('div');
                 pixel.className = 'pixel';
                 pixel.dataset.x = x;
                 pixel.dataset.y = y;
                 pixel.id = `pixel-${x}-${y}`;
-                grid.appendChild(pixel);
+                ui.grid.appendChild(pixel);
             }
         }
 
         function centerCanvas() {
-            const viewportRect = viewport.getBoundingClientRect(), gridRect = grid.getBoundingClientRect();
+            const viewportRect = ui.viewport.getBoundingClientRect(), gridRect = ui.grid.getBoundingClientRect();
             scale = Math.min(viewportRect.width / gridRect.width, viewportRect.height / gridRect.height) * 0.9;
             panX = (viewportRect.width - gridRect.width * scale) / 2;
             panY = (viewportRect.height - gridRect.height * scale) / 2;
@@ -240,57 +255,54 @@
         }
 
         function updateTransform() {
-            grid.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+            ui.grid.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
         }
 
         function createColorPalette() {
-            colorPalette.innerHTML = '';
+            ui.colorPalette.innerHTML = '';
             COLORS.forEach(color => {
                 const swatch = document.createElement('div');
                 swatch.className = 'color-swatch rounded-full';
                 swatch.style.backgroundColor = color;
                 swatch.dataset.color = color;
                 if (color === selectedColor) swatch.classList.add('selected');
-                colorPalette.appendChild(swatch);
+                ui.colorPalette.appendChild(swatch);
             });
         }
 
         function setupEventListeners() {
-            colorPalette.addEventListener('click', e => {
+            ui.colorPalette.addEventListener('click', e => {
                 const swatch = e.target.closest('.color-swatch');
                 if (!swatch) return;
                 selectedColor = swatch.dataset.color;
                 isErasing = false;
                 updateSelectedToolUI();
             });
-            eraserButton.addEventListener('click', () => {
+            ui.eraserButton.addEventListener('click', () => {
                 isErasing = !isErasing;
                 updateSelectedToolUI();
             });
-            viewport.addEventListener('mousedown', onPanStart);
+            ui.viewport.addEventListener('mousedown', onPanStart);
             window.addEventListener('mousemove', onPanMove);
             window.addEventListener('mouseup', onPanEnd);
-            viewport.addEventListener('wheel', onZoom);
+            ui.viewport.addEventListener('wheel', onZoom);
             window.addEventListener('keydown', e => { 
                 if (e.key.toLowerCase() === 'f') isFreeDrawing = true; 
-                if (e.key.toLowerCase() === 'e' && adminBtn.classList.contains('hidden') === false) isAdminBrushActive = true;
+                if (e.key.toLowerCase() === 'e' && !ui.adminBtn.classList.contains('hidden')) isAdminBrushActive = true;
             });
             window.addEventListener('keyup', e => { 
                 if (e.key.toLowerCase() === 'f') isFreeDrawing = false; 
                 if (e.key.toLowerCase() === 'e') isAdminBrushActive = false;
             });
-            grid.addEventListener('mousemove', e => {
+            ui.grid.addEventListener('mousemove', e => {
                 if (isPanning) return;
                 const pixel = e.target.closest('.pixel');
                 if (!pixel || !userId) return;
                 const x = parseInt(pixel.dataset.x), y = parseInt(pixel.dataset.y);
 
                 if (isFreeDrawing) {
-                    if (isErasing) {
-                        if (pixel.style.backgroundColor !== 'rgb(74, 85, 104)') deletePixel(x, y);
-                    } else {
-                        if (pixel.style.backgroundColor !== hexToRgb(selectedColor)) placePixel(x, y, selectedColor);
-                    }
+                    if (isErasing) deletePixel(x, y);
+                    else placePixel(x, y, selectedColor);
                 } else if (isAdminBrushActive) {
                     deletePixelArea(x, y, 5); // 5x5 brush size
                 }
@@ -298,85 +310,66 @@
         }
         
         function deletePixelArea(centerX, centerY, size) {
-            const startX = Math.max(0, centerX - Math.floor(size / 2));
-            const startY = Math.max(0, centerY - Math.floor(size / 2));
-            const endX = Math.min(GRID_WIDTH - 1, centerX + Math.floor(size / 2));
-            const endY = Math.min(GRID_HEIGHT - 1, centerY + Math.floor(size / 2));
-
-            for (let y = startY; y <= endY; y++) {
-                for (let x = startX; x <= endX; x++) {
-                    deletePixel(x, y);
-                }
-            }
+            const startX = Math.max(0, centerX - Math.floor(size / 2)), endX = Math.min(GRID_WIDTH - 1, centerX + Math.floor(size / 2));
+            const startY = Math.max(0, centerY - Math.floor(size / 2)), endY = Math.min(GRID_HEIGHT - 1, centerY + Math.floor(size / 2));
+            for (let y = startY; y <= endY; y++) for (let x = startX; x <= endX; x++) deletePixel(x, y);
         }
 
         function onPanStart(e) {
-            e.preventDefault();
-            isPanning = true;
-            viewport.classList.add('panning');
-            startPanX = e.clientX - panX;
-            startPanY = e.clientY - panY;
-            mousedownX = e.clientX;
-            mousedownY = e.clientY;
+            e.preventDefault(); isPanning = true; ui.viewport.classList.add('panning');
+            startPanX = e.clientX - panX; startPanY = e.clientY - panY;
+            mousedownX = e.clientX; mousedownY = e.clientY;
         }
 
         function onPanMove(e) {
-            if (!isPanning) return;
-            e.preventDefault();
-            panX = e.clientX - startPanX;
-            panY = e.clientY - startPanY;
+            if (!isPanning) return; e.preventDefault();
+            panX = e.clientX - startPanX; panY = e.clientY - startPanY;
             updateTransform();
         }
 
         function onPanEnd(e) {
             if (!isPanning) return;
-            isPanning = false;
-            viewport.classList.remove('panning');
-            if (Math.hypot(e.clientX - mousedownX, e.clientY - mousedownY) < DRAG_THRESHOLD) {
+            isPanning = false; ui.viewport.classList.remove('panning');
+            if (Math.hypot(e.clientX - mousedownX, e.clientY - mousedownY) < DRAG_THRESHOLD && !viewedUserId) {
                 const pixel = e.target.closest('.pixel');
                 if (pixel && userId) {
                     const x = parseInt(pixel.dataset.x), y = parseInt(pixel.dataset.y);
-                    if (isErasing) deletePixel(x, y);
-                    else placePixel(x, y, selectedColor);
+                    if (isErasing) deletePixel(x, y); else placePixel(x, y, selectedColor);
                 }
             }
         }
 
         function onZoom(e) {
             e.preventDefault();
-            const newScale = e.deltaY > 0 ? scale / 1.1 : scale * 1.1;
+            const rect = ui.viewport.getBoundingClientRect(), mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top;
+            const zoomFactor = 1.1;
+            const newScale = e.deltaY > 0 ? scale / zoomFactor : scale * zoomFactor;
             scale = Math.max(0.2, Math.min(newScale, 10));
-            const viewportRect = viewport.getBoundingClientRect();
-            const mouseX = e.clientX - viewportRect.left, mouseY = e.clientY - viewportRect.top;
-            panX = mouseX - (mouseX - panX) * (scale / (e.deltaY > 0 ? scale * 1.1 : scale / 1.1));
-            panY = mouseY - (mouseY - panY) * (scale / (e.deltaY > 0 ? scale * 1.1 : scale / 1.1));
+            panX = mouseX - (mouseX - panX) * (e.deltaY > 0 ? 1/zoomFactor : zoomFactor);
+            panY = mouseY - (mouseY - panY) * (e.deltaY > 0 ? 1/zoomFactor : zoomFactor);
             updateTransform();
         }
         
         function updateSelectedToolUI() {
             document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
-            if (isErasing) eraserButton.classList.add('selected');
+            if (isErasing) ui.eraserButton.classList.add('selected');
             else {
-                eraserButton.classList.remove('selected');
+                ui.eraserButton.classList.remove('selected');
                 const activeSwatch = document.querySelector(`.color-swatch[data-color="${selectedColor}"]`);
                 if (activeSwatch) activeSwatch.classList.add('selected');
             }
         }
 
         async function placePixel(x, y, color) {
-            if (!userId) return;
-            try {
-                const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, `${x}-${y}`);
-                await setDoc(docRef, { x, y, color, userId });
-            } catch (error) { console.error("Error placing pixel: ", error); }
+            if (!userId || viewedUserId) return;
+            const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, `${x}-${y}`);
+            try { await setDoc(docRef, { x, y, color, userId }); } catch (error) { console.error("Error placing pixel: ", error); }
         }
 
         async function deletePixel(x, y) {
-             if (!userId) return;
-            try {
-                const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, `${x}-${y}`);
-                await deleteDoc(docRef);
-            } catch (error) { console.error("Error deleting pixel: ", error); }
+             if (!userId || viewedUserId) return;
+             const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, `${x}-${y}`);
+            try { await deleteDoc(docRef); } catch (error) { console.error("Error deleting pixel: ", error); }
         }
 
         function listenForPixelChanges() {
@@ -386,8 +379,20 @@
                     const data = change.doc.data();
                     const pixelElement = document.getElementById(`pixel-${data.x}-${data.y}`);
                     if (!pixelElement) return;
-                    if (change.type === "added" || change.type === "modified") pixelElement.style.backgroundColor = data.color;
-                    else if (change.type === "removed") pixelElement.style.backgroundColor = '#4a5568';
+
+                    const isViewedUserPixel = data.userId === viewedUserId;
+
+                    if (change.type === "added" || change.type === "modified") {
+                        pixelElement.style.backgroundColor = data.color;
+                        if (viewedUserId) {
+                             pixelElement.classList.toggle('other-user', !isViewedUserPixel);
+                        }
+                    } else if (change.type === "removed") {
+                        pixelElement.style.backgroundColor = '#4a5568';
+                        if (viewedUserId) {
+                            pixelElement.classList.remove('other-user');
+                        }
+                    }
                 });
             }, error => console.error("Error listening to pixel changes:", error));
         }
