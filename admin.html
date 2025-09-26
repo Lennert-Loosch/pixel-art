@@ -25,6 +25,22 @@
         <p class="mt-4 text-lg">Initializing Admin Panel...</p>
     </div>
 
+    <!-- Custom Confirmation Modal -->
+    <div id="confirm-modal" class="hidden fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 transition-opacity duration-300">
+        <div class="bg-gray-800 rounded-lg p-6 w-full max-w-sm text-center shadow-xl transform transition-transform duration-300 scale-95">
+            <h3 id="modal-title" class="text-xl font-bold mb-4">Are you sure?</h3>
+            <p id="modal-body" class="text-gray-300 mb-6">This action cannot be undone.</p>
+            <div class="flex justify-end gap-4">
+                <button id="modal-cancel-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                <button id="modal-confirm-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md">Confirm</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Notification Banner -->
+    <div id="notice-banner" class="hidden fixed top-5 left-1/2 -translate-x-1/2 text-white py-2 px-5 rounded-lg shadow-lg transition-all duration-300 opacity-0 -translate-y-10 z-50"></div>
+
+
     <div id="access-denied" class="hidden flex-col items-center justify-center text-center p-8 min-h-screen">
         <h1 class="text-4xl font-bold mb-4 text-red-500">ACCESS DENIED</h1>
         <p class="text-gray-400 max-w-md">You do not have permission to view this page. Please sign in with an authorized account.</p>
@@ -97,9 +113,11 @@
         let db, auth;
         let currentUserRole = null; // null, 'regular', or 'super'
         let allUsers = new Map(); // For caching user data
+        let confirmCallback = null;
 
         const ui = {
-            loadingOverlay: document.getElementById('loading-overlay'), accessDenied: document.getElementById('access-denied'), adminDashboard: document.getElementById('admin-dashboard'), adminLoginBtn: document.getElementById('admin-login-btn'), adminLogoutBtn: document.getElementById('admin-logout-btn'), userListContainer: document.getElementById('user-list'), adminListContainer: document.getElementById('admin-list'), addAdminUidInput: document.getElementById('add-admin-uid'), addAdminBtn: document.getElementById('add-admin-btn'), adminManagementTab: document.getElementById('admin-management-tab'), canvasManagementTab: document.getElementById('canvas-management-tab'), clearCanvasBtn: document.getElementById('clear-canvas-btn'), userSearchInput: document.getElementById('user-search'), welcomeMessage: document.getElementById('welcome-message'), tabs: document.querySelectorAll('.tab'), tabContents: document.querySelectorAll('.tab-content')
+            loadingOverlay: document.getElementById('loading-overlay'), accessDenied: document.getElementById('access-denied'), adminDashboard: document.getElementById('admin-dashboard'), adminLoginBtn: document.getElementById('admin-login-btn'), adminLogoutBtn: document.getElementById('admin-logout-btn'), userListContainer: document.getElementById('user-list'), adminListContainer: document.getElementById('admin-list'), addAdminUidInput: document.getElementById('add-admin-uid'), addAdminBtn: document.getElementById('add-admin-btn'), adminManagementTab: document.getElementById('admin-management-tab'), canvasManagementTab: document.getElementById('canvas-management-tab'), clearCanvasBtn: document.getElementById('clear-canvas-btn'), userSearchInput: document.getElementById('user-search'), welcomeMessage: document.getElementById('welcome-message'), tabs: document.querySelectorAll('.tab'), tabContents: document.querySelectorAll('.tab-content'),
+            confirmModal: document.getElementById('confirm-modal'), modalTitle: document.getElementById('modal-title'), modalBody: document.getElementById('modal-body'), modalConfirmBtn: document.getElementById('modal-confirm-btn'), modalCancelBtn: document.getElementById('modal-cancel-btn'), noticeBanner: document.getElementById('notice-banner')
         };
         
         async function initialize() {
@@ -122,12 +140,51 @@
                 ui.addAdminBtn.addEventListener('click', addAdmin);
                 ui.clearCanvasBtn.addEventListener('click', clearCanvas);
                 ui.userSearchInput.addEventListener('input', renderUserList);
+                ui.modalConfirmBtn.addEventListener('click', handleConfirm);
+                ui.modalCancelBtn.addEventListener('click', hideConfirmationModal);
                 setupTabs();
 
             } catch (error) {
                 console.error("Initialization Error:", error);
-                ui.loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
+                showNotice("Error connecting to Firebase.");
             }
+        }
+
+        function showNotice(message, type = 'error') {
+            ui.noticeBanner.textContent = message;
+            ui.noticeBanner.className = 'fixed top-5 left-1/2 -translate-x-1/2 text-white py-2 px-5 rounded-lg shadow-lg transition-all duration-300 z-50';
+            if (type === 'success') ui.noticeBanner.classList.add('bg-green-600');
+            else ui.noticeBanner.classList.add('bg-red-600');
+            ui.noticeBanner.classList.remove('hidden', 'opacity-0', '-translate-y-10');
+            setTimeout(() => {
+                ui.noticeBanner.classList.add('opacity-0', '-translate-y-10');
+                setTimeout(() => ui.noticeBanner.classList.add('hidden'), 500);
+            }, 4000);
+        }
+
+        function showConfirmationModal(title, body, onConfirm) {
+            ui.modalTitle.textContent = title;
+            ui.modalBody.textContent = body;
+            confirmCallback = onConfirm;
+            ui.confirmModal.classList.remove('hidden');
+            setTimeout(() => {
+                ui.confirmModal.style.opacity = '1';
+                ui.confirmModal.querySelector('div').style.transform = 'scale(1)';
+            }, 10);
+        }
+
+        function handleConfirm() {
+            if (typeof confirmCallback === 'function') confirmCallback();
+            hideConfirmationModal();
+        }
+
+        function hideConfirmationModal() {
+            ui.confirmModal.style.opacity = '0';
+            ui.confirmModal.querySelector('div').style.transform = 'scale(0.95)';
+            setTimeout(() => {
+                ui.confirmModal.classList.add('hidden');
+                confirmCallback = null;
+            }, 300);
         }
 
         function setupTabs() {
@@ -275,57 +332,80 @@
             });
         }
         
-        async function promoteToAdmin(e) {
+        function promoteToAdmin(e) {
             if (currentUserRole !== 'super') return;
             const uid = e.target.dataset.uid;
-            if (confirm(`Promote ${allUsers.get(uid)?.displayName || uid} to a regular admin?`)) {
-                 const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
-                 await setDoc(adminDocRef, { promotedAt: new Date(), promotedBy: auth.currentUser.uid });
-            }
+            showConfirmationModal(
+                `Promote User?`,
+                `Are you sure you want to promote ${allUsers.get(uid)?.displayName || uid} to a regular admin?`,
+                async () => {
+                    const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
+                    await setDoc(adminDocRef, { promotedAt: new Date(), promotedBy: auth.currentUser.uid });
+                    showNotice('User promoted to admin.', 'success');
+                }
+            );
         }
 
         async function addAdmin() {
             if (currentUserRole !== 'super') return;
             const uid = ui.addAdminUidInput.value.trim();
-            if (!uid) return alert("Please enter a User ID.");
-            if (uid === SUPER_ADMIN_UID) return alert("Cannot modify super admin.");
+            if (!uid) return showNotice("Please enter a User ID.");
+            if (uid === SUPER_ADMIN_UID) return showNotice("Cannot modify super admin.");
             const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
             await setDoc(adminDocRef, { addedAt: new Date(), addedBy: auth.currentUser.uid });
             ui.addAdminUidInput.value = '';
+            showNotice('Admin added successfully.', 'success');
         }
 
-        async function removeAdmin(e) {
+        function removeAdmin(e) {
             if (currentUserRole !== 'super') return;
             const uid = e.target.dataset.uid;
-            if (confirm(`Remove admin privileges for ${allUsers.get(uid)?.displayName || uid}?`)) {
-                const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
-                await deleteDoc(adminDocRef);
-            }
+             showConfirmationModal(
+                `Remove Admin?`,
+                `Are you sure you want to remove admin privileges for ${allUsers.get(uid)?.displayName || uid}?`,
+                async () => {
+                    const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
+                    await deleteDoc(adminDocRef);
+                    showNotice('Admin privileges removed.', 'success');
+                }
+            );
         }
         
-        async function toggleBan(e) {
+        function toggleBan(e) {
             const uid = e.target.dataset.uid;
             const user = allUsers.get(uid);
             if (!user) return;
             const banDocRef = doc(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`, uid);
+            
             if (user.isBanned) {
-                if (confirm(`Unban user ${user.displayName || uid}?`)) await deleteDoc(banDocRef);
+                showConfirmationModal(
+                    `Unban User?`, `Are you sure you want to unban ${user.displayName || uid}?`,
+                    async () => { await deleteDoc(banDocRef); showNotice('User unbanned.', 'success'); }
+                );
             } else {
-                if (confirm(`Ban user ${user.displayName || uid}?`)) await setDoc(banDocRef, { bannedAt: new Date(), bannedBy: auth.currentUser.uid });
+                showConfirmationModal(
+                    `Ban User?`, `Are you sure you want to ban ${user.displayName || uid}?`,
+                    async () => { await setDoc(banDocRef, { bannedAt: new Date(), bannedBy: auth.currentUser.uid }); showNotice('User banned.', 'success');}
+                );
             }
         }
         
-        async function clearCanvas() {
+        function clearCanvas() {
             if (currentUserRole !== 'super') return;
-            if (!confirm("ARE YOU ABSOLUTELY SURE?\nThis will delete every pixel on the canvas permanently.")) return;
-            ui.loadingOverlay.classList.remove('hidden');
-            const pixelsRef = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
-            const snapshot = await getDocs(pixelsRef);
-            const batch = writeBatch(db);
-            snapshot.docs.forEach(d => batch.delete(d.ref));
-            await batch.commit();
-            ui.loadingOverlay.classList.add('hidden');
-            alert("Canvas has been cleared.");
+            showConfirmationModal(
+                'ERASE ENTIRE CANVAS?',
+                'This will permanently delete all pixels from the canvas. This action cannot be undone.',
+                async () => {
+                    ui.loadingOverlay.classList.remove('hidden');
+                    const pixelsRef = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
+                    const snapshot = await getDocs(pixelsRef);
+                    const batch = writeBatch(db);
+                    snapshot.docs.forEach(d => batch.delete(d.ref));
+                    await batch.commit();
+                    ui.loadingOverlay.classList.add('hidden');
+                    showNotice("Canvas has been cleared.", "success");
+                }
+            );
         }
 
         initialize();

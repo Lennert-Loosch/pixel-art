@@ -3,93 +3,97 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Pixel Canvas</title>
+    <title>Admin Panel - Live Pixel Canvas</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #1a202c; touch-action: none; }
-        .canvas-viewport { width: 100%; height: 65vh; border: 2px solid #4a5568; background-color: #2d3748; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); overflow: hidden; cursor: grab; position: relative; }
-        @media (min-width: 1024px) {
-            .canvas-viewport { width: 95vmin; height: 76vmin; }
-        }
-        .canvas-viewport.panning { cursor: grabbing; }
-        .pixel-grid { display: grid; grid-template-columns: repeat(100, 15px); grid-template-rows: repeat(76, 15px); transform-origin: 0 0; will-change: transform; }
-        .pixel { width: 15px; height: 15px; background-color: #4a5568; border: 1px solid #2d3748; transition: transform 0.1s ease-in-out, background-color 0.3s, opacity 0.3s; }
-        .pixel:hover { transform: scale(1.2); z-index: 10; }
-        .pixel.other-user { opacity: 0.2; pointer-events: none; }
-        .pixel.pending { box-shadow: 0 0 0 3px #facc15 inset; z-index: 20; }
-        .color-swatch { width: 35px; height: 35px; cursor: pointer; border: 3px solid transparent; transition: border-color 0.2s ease-in-out; }
-        .color-swatch.selected, .eraser.selected { border-color: #63b3ed; box-shadow: 0 0 0 3px rgba(99, 179, 237, 0.5); }
-        .eraser { border: 3px solid transparent; }
+        body { font-family: 'Inter', sans-serif; background-color: #1a202c; }
         .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .notice { transition: opacity 0.5s, transform 0.5s; }
+        .tab { transition: all 0.2s ease-in-out; }
+        .tab.active { border-color: #63b3ed; background-color: #2b6cb0; }
+        .online-indicator { width: 10px; height: 10px; border-radius: 50%; background-color: #4ade80; box-shadow: 0 0 5px #4ade80; }
+        .offline-indicator { width: 10px; height: 10px; border-radius: 50%; background-color: #9ca3af; }
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
 </head>
-<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-2 sm:p-4">
-
-    <div class="fixed top-2 sm:top-4 right-2 sm:right-4 flex gap-2 sm:gap-4 z-20">
-        <a id="admin-btn" href="./admin.html" class="hidden bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition-transform transform hover:scale-105">
-            Admin
-        </a>
-        <button id="logout-btn" class="hidden bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition-transform transform hover:scale-105">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-            <span class="hidden sm:inline">Logout</span>
-        </button>
-    </div>
-    
-    <div id="view-mode-notice" class="hidden fixed top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white py-2 px-5 rounded-lg shadow-lg z-20 flex items-center gap-4">
-       <span id="view-mode-text"></span>
-       <a href="./admin.html" class="bg-blue-700 hover:bg-blue-800 text-white font-bold py-1 px-3 rounded-md">&times; Exit View</a>
-    </div>
+<body class="bg-gray-900 text-white min-h-screen p-4 sm:p-6 md:p-8">
 
     <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-80 flex flex-col items-center justify-center z-50 p-4">
         <div class="loader"></div>
-        <p class="mt-4 text-lg">Connecting...</p>
-    </div>
-    
-    <div id="error-notice" class="notice hidden fixed top-0 left-1/2 -translate-x-1/2 mt-4 bg-red-800 text-white py-2 px-5 rounded-lg shadow-lg opacity-0 -translate-y-10 z-40"></div>
-    
-    <div id="banned-container" class="hidden flex-col items-center justify-center text-center p-8">
-         <h1 class="text-4xl font-bold mb-4 text-red-500">Access Denied</h1>
-        <p class="text-gray-400 max-w-md">Your account has been banned from participating.</p>
+        <p class="mt-4 text-lg">Initializing Admin Panel...</p>
     </div>
 
-    <div id="login-container" class="hidden flex-col items-center justify-center text-center p-8">
-        <h1 class="text-4xl font-bold mb-4">Welcome to Live Pixel Canvas</h1>
-        <p class="text-gray-400 mb-8 max-w-md">Join the collaborative artboard. Sign in with your Google account to start placing pixels.</p>
-        <button id="google-login-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg flex items-center gap-3 transition-transform transform hover:scale-105">
-            <svg class="w-6 h-6" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039L38.806 9.652C34.896 6.043 29.803 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"></path><path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.845-5.379C34.896 6.043 29.803 4 24 4C16.318 4 9.656 8.337 6.306 14.691z"></path><path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.222 0-9.618-3.226-11.283-7.616l-6.522 5.025C9.505 39.556 16.227 44 24 44z"></path><path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571l6.19 5.238C42.012 36.417 44 30.861 44 24c0-1.341-.138-2.65-.389-3.917z"></path></svg>
+    <!-- Custom Confirmation Modal -->
+    <div id="confirm-modal" class="hidden fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 transition-opacity duration-300">
+        <div class="bg-gray-800 rounded-lg p-6 w-full max-w-sm text-center shadow-xl transform transition-transform duration-300 scale-95">
+            <h3 id="modal-title" class="text-xl font-bold mb-4">Are you sure?</h3>
+            <p id="modal-body" class="text-gray-300 mb-6">This action cannot be undone.</p>
+            <div class="flex justify-end gap-4">
+                <button id="modal-cancel-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                <button id="modal-confirm-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md">Confirm</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Notification Banner -->
+    <div id="notice-banner" class="hidden fixed top-5 left-1/2 -translate-x-1/2 text-white py-2 px-5 rounded-lg shadow-lg transition-all duration-300 opacity-0 -translate-y-10 z-50"></div>
+
+
+    <div id="access-denied" class="hidden flex-col items-center justify-center text-center p-8 min-h-screen">
+        <h1 class="text-4xl font-bold mb-4 text-red-500">ACCESS DENIED</h1>
+        <p class="text-gray-400 max-w-md">You do not have permission to view this page. Please sign in with an authorized account.</p>
+        <button id="admin-login-btn" class="mt-8 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg flex items-center gap-3 transition-transform transform hover:scale-105">
             Sign in with Google
         </button>
     </div>
 
-    <div id="app-container" class="hidden flex w-full max-w-7xl h-full mx-auto flex-col lg:flex-row items-center justify-center gap-4 lg:gap-8">
-        <div id="canvas-viewport" class="canvas-viewport rounded-lg">
-            <div id="pixel-grid" class="pixel-grid"></div>
+    <div id="admin-dashboard" class="hidden w-full max-w-6xl mx-auto">
+        <div class="flex flex-wrap justify-between items-center mb-6 gap-4">
+            <div class="flex items-center gap-4">
+                 <h1 class="text-3xl font-bold">Admin Dashboard</h1>
+                 <a href="./index.html" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg">Back to Canvas</a>
+            </div>
+            <div class="flex items-center gap-2">
+                <span id="welcome-message" class="text-gray-400"></span>
+                <button id="admin-logout-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2">Logout</button>
+            </div>
         </div>
-        <div id="controls-panel" class="w-full lg:w-auto flex flex-col items-center gap-4 bg-gray-800 p-4 rounded-xl shadow-lg">
-            <h1 class="text-2xl font-bold text-center">Live Pixel Canvas</h1>
-            <div id="placement-ui" class="hidden w-full p-3 bg-gray-700 rounded-lg text-center">
-                <p class="mb-2 text-sm">Place pixel at (<span id="pending-coords"></span>)?</p>
-                <div class="flex justify-center gap-2">
-                    <button id="confirm-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">Confirm</button>
-                    <button id="cancel-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-md">Cancel</button>
+
+        <div id="tabs-container" class="mb-6 flex border-b border-gray-700 overflow-x-auto">
+            <button data-tab="users" class="tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white flex-shrink-0">User Management</button>
+            <button data-tab="admins" id="admin-management-tab" class="hidden tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white flex-shrink-0">Admin Management</button>
+            <button data-tab="canvas" id="canvas-management-tab" class="hidden tab py-2 px-4 text-gray-300 border-b-2 border-transparent hover:border-gray-500 hover:text-white flex-shrink-0">Canvas Management</button>
+        </div>
+
+        <!-- User Management Tab -->
+        <div id="users-tab-content" class="tab-content hidden">
+            <div class="bg-gray-800 p-6 rounded-lg">
+                <h2 class="text-2xl font-semibold mb-4">Users</h2>
+                <input type="text" id="user-search" placeholder="Search by Username or User ID..." class="w-full bg-gray-700 text-white rounded-md px-4 py-2 mb-4 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <div id="user-list" class="space-y-3 max-h-[60vh] overflow-y-auto"></div>
+            </div>
+        </div>
+        
+        <!-- Canvas Management Tab (Super Admin only) -->
+        <div id="canvas-tab-content" class="tab-content hidden">
+             <div class="bg-gray-800 p-6 rounded-lg">
+                <h2 class="text-2xl font-semibold mb-4">Canvas Tools</h2>
+                <p class="text-gray-300 mb-4">This will permanently delete all pixels from the canvas. This action cannot be undone.</p>
+                <button id="clear-canvas-btn" class="bg-red-800 hover:bg-red-900 text-white font-bold py-2 px-4 rounded-md">ERASE ENTIRE CANVAS</button>
+            </div>
+        </div>
+
+        <!-- Admin Management Tab (Super Admin only) -->
+        <div id="admins-tab-content" class="tab-content hidden">
+            <div class="bg-gray-800 p-6 rounded-lg mb-6">
+                <h2 class="text-2xl font-semibold mb-4">Manage Regular Admins</h2>
+                <div class="flex flex-wrap gap-4 mb-4">
+                    <input type="text" id="add-admin-uid" placeholder="Enter User ID to make admin" class="flex-grow bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[250px]">
+                    <button id="add-admin-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">Add Admin</button>
                 </div>
-            </div>
-            <div id="cooldown-timer" class="w-full p-3 bg-blue-800 rounded-lg text-center hidden">
-                Next pixel in <span id="cooldown-seconds">10</span>s
-            </div>
-            <p class="text-sm text-gray-400 text-center">Drag/Scroll to Pan/Zoom. Hold 'F' to draw.</p>
-            <div id="color-palette" class="grid grid-cols-8 sm:grid-cols-5 gap-2"></div>
-            <button id="eraser" class="eraser w-full py-3 px-4 bg-gray-700 hover:bg-gray-600 rounded-lg text-lg font-semibold transition-all duration-200 flex items-center justify-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 17a1 1 0 0 0 1 1H15a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1H3.5a1 1 0 0 0-1 1v8z"></path><path d="M15 8V6a2 2 0 0 0-2-2H8.5L6.5 2H4a2 2 0 0 0-2 2v2"></path><path d="M21 17h-1"></path><path d="M21 13h-4"></path><path d="M21 9h-2"></path></svg>
-                Eraser
-            </button>
-            <div class="text-center">
-                <span id="user-display" class="font-mono text-sm text-gray-300"></span>
+                <div id="admin-list" class="space-y-3 max-h-64 overflow-y-auto"></div>
             </div>
         </div>
     </div>
@@ -97,359 +101,313 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, getDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, getDocs, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'live-pixel-canvas';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {"apiKey":"AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4","authDomain":"pixel-ed9f4.firebaseapp.com","projectId":"pixel-ed9f4","storageBucket":"pixel-ed9f4.appspot.com","messagingSenderId":"61835815357","appId":"1:61835815357:web:579d025b165c1edcbc8ad4"};
-        
+
         const SUPER_ADMIN_UID = "5ECFbV0p1QTMDxOjbalkPMdEl2m1";
-        const GRID_WIDTH = 100, GRID_HEIGHT = 76;
-        const USERS_COLLECTION_NAME = 'users', PIXEL_COLLECTION_NAME = 'pixels', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', ADMINS_COLLECTION_NAME = 'admins';
-        const PIXEL_COOLDOWN_S = 10;
-        const COLORS = ['#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000', '#FF4500', '#FFA800', '#FFD635', '#00A368', '#7EED56', '#2450A4', '#3690EA', '#51E9F4', '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'];
-        
-        let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval, isAdmin = false;
-        let viewedUserId = null, pendingPixel = null, lastPlacementTime = 0, cooldownInterval;
-        let isFreeDrawing = false, isAdminBrushActive = false;
-        let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
-        const DRAG_THRESHOLD = 5;
+        const USERS_COLLECTION_NAME = 'users', ADMINS_COLLECTION_NAME = 'admins', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', PIXEL_COLLECTION_NAME = 'pixels';
+        const ONLINE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
+
+        let db, auth;
+        let currentUserRole = null; // null, 'regular', or 'super'
+        let allUsers = new Map(); // For caching user data
+        let confirmCallback = null;
 
         const ui = {
-            viewport: document.getElementById('canvas-viewport'), grid: document.getElementById('pixel-grid'), colorPalette: document.getElementById('color-palette'), eraserButton: document.getElementById('eraser'), userDisplay: document.getElementById('user-display'), loadingOverlay: document.getElementById('loading-overlay'), loginContainer: document.getElementById('login-container'), appContainer: document.getElementById('app-container'), googleLoginBtn: document.getElementById('google-login-btn'), errorNotice: document.getElementById('error-notice'), logoutBtn: document.getElementById('logout-btn'), bannedContainer: document.getElementById('banned-container'), adminBtn: document.getElementById('admin-btn'), viewModeNotice: document.getElementById('view-mode-notice'), viewModeText: document.getElementById('view-mode-text'), controlsPanel: document.getElementById('controls-panel'), placementUI: document.getElementById('placement-ui'), pendingCoords: document.getElementById('pending-coords'), confirmBtn: document.getElementById('confirm-btn'), cancelBtn: document.getElementById('cancel-btn'), cooldownTimer: document.getElementById('cooldown-timer'), cooldownSeconds: document.getElementById('cooldown-seconds')
+            loadingOverlay: document.getElementById('loading-overlay'), accessDenied: document.getElementById('access-denied'), adminDashboard: document.getElementById('admin-dashboard'), adminLoginBtn: document.getElementById('admin-login-btn'), adminLogoutBtn: document.getElementById('admin-logout-btn'), userListContainer: document.getElementById('user-list'), adminListContainer: document.getElementById('admin-list'), addAdminUidInput: document.getElementById('add-admin-uid'), addAdminBtn: document.getElementById('add-admin-btn'), adminManagementTab: document.getElementById('admin-management-tab'), canvasManagementTab: document.getElementById('canvas-management-tab'), clearCanvasBtn: document.getElementById('clear-canvas-btn'), userSearchInput: document.getElementById('user-search'), welcomeMessage: document.getElementById('welcome-message'), tabs: document.querySelectorAll('.tab'), tabContents: document.querySelectorAll('.tab-content'),
+            confirmModal: document.getElementById('confirm-modal'), modalTitle: document.getElementById('modal-title'), modalBody: document.getElementById('modal-body'), modalConfirmBtn: document.getElementById('modal-confirm-btn'), modalCancelBtn: document.getElementById('modal-cancel-btn'), noticeBanner: document.getElementById('notice-banner')
         };
         
-        function checkUrlParams() {
-            const urlParams = new URLSearchParams(window.location.search);
-            viewedUserId = urlParams.get('viewUser');
-            if (viewedUserId) {
-                ui.viewModeText.textContent = `Viewing pixels by: ${viewedUserId.substring(0, 10)}...`;
-                ui.viewModeNotice.classList.remove('hidden');
-                ui.controlsPanel.classList.add('hidden');
-            }
-        }
-
         async function initialize() {
-            checkUrlParams();
             try {
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                
+
                 onAuthStateChanged(auth, async (user) => {
                     ui.loadingOverlay.classList.add('hidden');
-                    if (presenceInterval) clearInterval(presenceInterval);
-
-                    if (user) {
-                        const isBanned = await checkBanStatus(user.uid);
-                        if (isBanned) {
-                            showBannedMessage();
-                            return;
-                        }
-                        
-                        updateUserPresence(user);
-                        presenceInterval = setInterval(() => updateUserPresence(user), 60000);
-
-                        isAdmin = await checkAdminStatus(user.uid);
-                        if (isAdmin) ui.adminBtn.classList.remove('hidden'); else ui.adminBtn.classList.add('hidden');
-
-                        userId = user.uid;
-                        ui.userDisplay.textContent = user.displayName || user.email;
-                        ui.loginContainer.classList.add('hidden');
-                        ui.appContainer.classList.remove('hidden');
-                        ui.logoutBtn.classList.remove('hidden');
-
-                        if (!isAppSetup) {
-                            setupApp();
-                            isAppSetup = true;
-                        }
-                    } else {
-                        userId = null;
-                        isAdmin = false;
-                        ui.appContainer.classList.add('hidden');
-                        ui.loginContainer.classList.remove('hidden');
-                        ui.logoutBtn.classList.add('hidden');
-                        ui.adminBtn.classList.add('hidden');
-                        ui.bannedContainer.classList.add('hidden');
+                    if (user) await checkUserRole(user);
+                    else {
+                        currentUserRole = null;
+                        showAccessDenied();
                     }
                 });
 
-                ui.googleLoginBtn.addEventListener('click', handleGoogleLogin);
-                ui.logoutBtn.addEventListener('click', () => signOut(auth));
-                ui.confirmBtn.addEventListener('click', confirmPlacement);
-                ui.cancelBtn.addEventListener('click', cancelPlacement);
+                ui.adminLoginBtn.addEventListener('click', () => signInWithPopup(auth, new GoogleAuthProvider()));
+                ui.adminLogoutBtn.addEventListener('click', () => signOut(auth));
+                ui.addAdminBtn.addEventListener('click', addAdmin);
+                ui.clearCanvasBtn.addEventListener('click', clearCanvas);
+                ui.userSearchInput.addEventListener('input', renderUserList);
+                ui.modalConfirmBtn.addEventListener('click', handleConfirm);
+                ui.modalCancelBtn.addEventListener('click', hideConfirmationModal);
+                setupTabs();
 
             } catch (error) {
-                console.error("Firebase Initialization Error:", error);
-                ui.loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
+                console.error("Initialization Error:", error);
+                showNotice("Error connecting to Firebase.");
             }
         }
 
-        async function updateUserPresence(user) {
-            const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, user.uid);
-            await setDoc(userDocRef, { uid: user.uid, displayName: user.displayName, email: user.email, lastSeen: serverTimestamp() }, { merge: true });
-        }
-
-        async function checkAdminStatus(uid) {
-             if (uid === SUPER_ADMIN_UID) return true;
-             const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
-             const docSnap = await getDoc(adminDocRef);
-             return docSnap.exists();
-        }
-
-        async function checkBanStatus(uid) {
-            const banDocRef = doc(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`, uid);
-            const docSnap = await getDoc(banDocRef);
-            return docSnap.exists();
-        }
-
-        function showBannedMessage() {
-            ui.loginContainer.classList.add('hidden');
-            ui.appContainer.classList.add('hidden');
-            ui.bannedContainer.classList.remove('hidden');
-            ui.logoutBtn.classList.remove('hidden');
-            ui.adminBtn.classList.add('hidden');
-        }
-        
-        function showError(message) {
-            ui.errorNotice.textContent = message;
-            ui.errorNotice.classList.remove('hidden', 'opacity-0', '-translate-y-10');
+        function showNotice(message, type = 'error') {
+            ui.noticeBanner.textContent = message;
+            ui.noticeBanner.className = 'fixed top-5 left-1/2 -translate-x-1/2 text-white py-2 px-5 rounded-lg shadow-lg transition-all duration-300 z-50';
+            if (type === 'success') ui.noticeBanner.classList.add('bg-green-600');
+            else ui.noticeBanner.classList.add('bg-red-600');
+            ui.noticeBanner.classList.remove('hidden', 'opacity-0', '-translate-y-10');
             setTimeout(() => {
-                ui.errorNotice.classList.add('opacity-0', '-translate-y-10');
-                setTimeout(() => ui.errorNotice.classList.add('hidden'), 500);
-            }, 5000);
+                ui.noticeBanner.classList.add('opacity-0', '-translate-y-10');
+                setTimeout(() => ui.noticeBanner.classList.add('hidden'), 500);
+            }, 4000);
         }
 
-        async function handleGoogleLogin() {
-            try { await signInWithPopup(auth, new GoogleAuthProvider()); } 
-            catch (error) { console.error("Google Sign-In Error:", error); showError("Sign-in failed. Check console & enable popups."); }
+        function showConfirmationModal(title, body, onConfirm) {
+            ui.modalTitle.textContent = title;
+            ui.modalBody.textContent = body;
+            confirmCallback = onConfirm;
+            ui.confirmModal.classList.remove('hidden');
+            setTimeout(() => {
+                ui.confirmModal.style.opacity = '1';
+                ui.confirmModal.querySelector('div').style.transform = 'scale(1)';
+            }, 10);
         }
 
-        function setupApp() {
-            createGrid();
-            if (!viewedUserId) {
-                createColorPalette();
-                setupEventListeners();
+        function handleConfirm() {
+            if (typeof confirmCallback === 'function') confirmCallback();
+            hideConfirmationModal();
+        }
+
+        function hideConfirmationModal() {
+            ui.confirmModal.style.opacity = '0';
+            ui.confirmModal.querySelector('div').style.transform = 'scale(0.95)';
+            setTimeout(() => {
+                ui.confirmModal.classList.add('hidden');
+                confirmCallback = null;
+            }, 300);
+        }
+
+        function setupTabs() {
+            ui.tabs.forEach(tab => tab.addEventListener('click', () => {
+                ui.tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                ui.tabContents.forEach(content => content.id === `${tab.dataset.tab}-tab-content` ? content.classList.remove('hidden') : content.classList.add('hidden'));
+            }));
+            ui.tabs[0].click();
+        }
+
+        async function checkUserRole(user) {
+            ui.welcomeMessage.textContent = `Welcome, ${user.displayName || 'Admin'}`;
+            if (user.uid === SUPER_ADMIN_UID) {
+                currentUserRole = 'super';
+                showDashboard();
             } else {
-                setupPanZoomListeners();
+                const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, user.uid);
+                const docSnap = await getDoc(adminDocRef);
+                currentUserRole = docSnap.exists() ? 'regular' : null;
+                docSnap.exists() ? showDashboard() : showAccessDenied();
             }
-            listenForPixelChanges();
-            centerCanvas();
-        }
-
-        function createGrid() {
-            ui.grid.innerHTML = '';
-            for (let y = 0; y < GRID_HEIGHT; y++) for (let x = 0; x < GRID_WIDTH; x++) {
-                const pixel = document.createElement('div');
-                pixel.className = 'pixel';
-                pixel.dataset.x = x;
-                pixel.dataset.y = y;
-                pixel.id = `pixel-${x}-${y}`;
-                ui.grid.appendChild(pixel);
-            }
-        }
-
-        function centerCanvas() {
-            const viewportRect = ui.viewport.getBoundingClientRect();
-            const scaleX = viewportRect.width / (GRID_WIDTH * 15), scaleY = viewportRect.height / (GRID_HEIGHT * 15);
-            scale = Math.min(scaleX, scaleY) * 0.9;
-            panX = (viewportRect.width - (GRID_WIDTH * 15 * scale)) / 2;
-            panY = (viewportRect.height - (GRID_HEIGHT * 15 * scale)) / 2;
-            updateTransform();
-        }
-
-        function updateTransform() { ui.grid.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`; }
-
-        function createColorPalette() {
-            ui.colorPalette.innerHTML = '';
-            COLORS.forEach(color => {
-                const swatch = document.createElement('div');
-                swatch.className = 'color-swatch rounded-full';
-                swatch.style.backgroundColor = color;
-                swatch.dataset.color = color;
-                if (color === selectedColor) swatch.classList.add('selected');
-                ui.colorPalette.appendChild(swatch);
-            });
         }
         
-        function setupPanZoomListeners() {
-            ui.viewport.addEventListener('mousedown', onPanStart);
-            window.addEventListener('mousemove', onPanMove);
-            window.addEventListener('mouseup', onPanEnd);
-            ui.viewport.addEventListener('wheel', onZoom, { passive: false });
-            ui.viewport.addEventListener('touchstart', onPanStart, { passive: false });
-            window.addEventListener('touchmove', onPanMove, { passive: false });
-            window.addEventListener('touchend', onPanEnd);
+        function showAccessDenied() {
+            ui.adminDashboard.classList.add('hidden');
+            ui.accessDenied.classList.remove('hidden');
         }
 
-        function setupEventListeners() {
-            setupPanZoomListeners();
-            ui.colorPalette.addEventListener('click', e => {
-                const swatch = e.target.closest('.color-swatch');
-                if (!swatch) return;
-                selectedColor = swatch.dataset.color;
-                isErasing = false;
-                updateSelectedToolUI();
-            });
-            ui.eraserButton.addEventListener('click', () => { isErasing = !isErasing; updateSelectedToolUI(); });
-            window.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = true; });
-            window.addEventListener('keyup', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = false; });
-            ui.grid.addEventListener('mousemove', e => { if (isPanning || !isFreeDrawing) return; const pixel = e.target.closest('.pixel'); if (pixel) initiatePlacement(parseInt(pixel.dataset.x), parseInt(pixel.dataset.y), true); });
-        }
-        
-        function getEventCoords(e) { return e.touches ? { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY } : { clientX: e.clientX, clientY: e.clientY }; }
-
-        function onPanStart(e) {
-            e.preventDefault(); isPanning = true; ui.viewport.classList.add('panning');
-            const coords = getEventCoords(e);
-            startPanX = coords.clientX - panX; startPanY = coords.clientY - panY;
-            mousedownX = coords.clientX; mousedownY = coords.clientY;
-        }
-
-        function onPanMove(e) {
-            if (!isPanning) return; e.preventDefault();
-            const coords = getEventCoords(e);
-            panX = coords.clientX - startPanX; panY = coords.clientY - startPanY;
-            updateTransform();
-        }
-
-        function onPanEnd(e) {
-            if (!isPanning) return;
-            isPanning = false; ui.viewport.classList.remove('panning');
-            const endCoords = e.changedTouches ? e.changedTouches[0] : e;
-            if (Math.hypot(endCoords.clientX - mousedownX, endCoords.clientY - mousedownY) < DRAG_THRESHOLD && !viewedUserId) {
-                const pixel = document.elementFromPoint(endCoords.clientX, endCoords.clientY);
-                if (pixel && pixel.classList.contains('pixel')) {
-                    initiatePlacement(parseInt(pixel.dataset.x), parseInt(pixel.dataset.y));
-                }
-            }
-        }
-
-        function onZoom(e) {
-            e.preventDefault();
-            const rect = ui.viewport.getBoundingClientRect(), mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top;
-            const zoomFactor = 1.1;
-            const newScale = e.deltaY > 0 ? scale / zoomFactor : scale * zoomFactor;
-            scale = Math.max(0.2, Math.min(newScale, 10));
-            panX = mouseX - (mouseX - panX) * (e.deltaY > 0 ? 1/zoomFactor : zoomFactor);
-            panY = mouseY - (mouseY - panY) * (e.deltaY > 0 ? 1/zoomFactor : zoomFactor);
-            updateTransform();
-        }
-
-        function startCooldown() {
-            if (isAdmin) return;
-            lastPlacementTime = Date.now();
-            ui.cooldownTimer.classList.remove('hidden');
-            let secondsLeft = PIXEL_COOLDOWN_S;
-            ui.cooldownSeconds.textContent = secondsLeft;
-            cooldownInterval = setInterval(() => {
-                secondsLeft--;
-                ui.cooldownSeconds.textContent = secondsLeft;
-                if (secondsLeft <= 0) {
-                    clearInterval(cooldownInterval);
-                    ui.cooldownTimer.classList.add('hidden');
-                }
-            }, 1000);
-        }
-        
-        function initiatePlacement(x, y, isAutoConfirm = false) {
-            if (!userId || viewedUserId) return;
-            const timeSinceLast = Date.now() - lastPlacementTime;
-            if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
-                if (!ui.cooldownTimer.classList.contains('hidden')) return;
-                const secondsLeft = Math.ceil((PIXEL_COOLDOWN_S * 1000 - timeSinceLast) / 1000);
-                ui.cooldownSeconds.textContent = secondsLeft;
-                ui.cooldownTimer.classList.remove('hidden');
-                return;
-            }
-            if (pendingPixel) cancelPlacement();
+        function showDashboard() {
+            ui.accessDenied.classList.add('hidden');
+            ui.adminDashboard.classList.remove('hidden');
             
-            const pixelEl = document.getElementById(`pixel-${x}-${y}`);
-            if (!pixelEl) return;
-            
-            pendingPixel = { x, y, color: isErasing ? null : selectedColor, originalColor: pixelEl.style.backgroundColor };
-            pixelEl.style.backgroundColor = isErasing ? '#4a5568' : selectedColor;
-            pixelEl.classList.add('pending');
-
-            if ((isAutoConfirm && isAdmin) || (isAutoConfirm && !isAdmin)) {
-                confirmPlacement();
+            if (currentUserRole === 'super') {
+                ui.adminManagementTab.classList.remove('hidden');
+                ui.canvasManagementTab.classList.remove('hidden');
+                loadAdminList();
             } else {
-                ui.pendingCoords.textContent = `${x}, ${y}`;
-                ui.placementUI.classList.remove('hidden');
+                ui.adminManagementTab.classList.add('hidden');
+                ui.canvasManagementTab.classList.add('hidden');
             }
+            listenForUserChanges();
         }
         
-        function confirmPlacement() {
-            if (!pendingPixel) return;
-            const { x, y, color } = pendingPixel;
-            if (color === null) deletePixel(x, y);
-            else placePixel(x, y, color);
-            
-            startCooldown();
-            
-            const pixelEl = document.getElementById(`pixel-${x}-${y}`);
-            if(pixelEl) pixelEl.classList.remove('pending');
+        function listenForUserChanges() {
+            const usersRef = collection(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`);
+            const adminsRef = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
+            const bannedRef = collection(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`);
 
-            pendingPixel = null;
-            ui.placementUI.classList.add('hidden');
-        }
-
-        function cancelPlacement() {
-            if (!pendingPixel) return;
-            const { x, y, originalColor } = pendingPixel;
-            const pixelEl = document.getElementById(`pixel-${x}-${y}`);
-            if(pixelEl) {
-                pixelEl.style.backgroundColor = originalColor;
-                pixelEl.classList.remove('pending');
-            }
-            pendingPixel = null;
-            ui.placementUI.classList.add('hidden');
-        }
-        
-        function updateSelectedToolUI() {
-            document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
-            if (isErasing) ui.eraserButton.classList.add('selected');
-            else {
-                ui.eraserButton.classList.remove('selected');
-                document.querySelector(`.color-swatch[data-color="${selectedColor}"]`)?.classList.add('selected');
-            }
-        }
-
-        async function placePixel(x, y, color) {
-            if (!userId || viewedUserId) return;
-            const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, `${x}-${y}`);
-            try { await setDoc(docRef, { x, y, color, userId }); } catch (error) { console.error("Error placing pixel: ", error); }
-        }
-
-        async function deletePixel(x, y) {
-             if (!userId || viewedUserId) return;
-             const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, `${x}-${y}`);
-            try { await deleteDoc(docRef); } catch (error) { console.error("Error deleting pixel: ", error); }
-        }
-
-        function listenForPixelChanges() {
-            const collectionRef = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
-            onSnapshot(collectionRef, snapshot => {
+            onSnapshot(usersRef, (snapshot) => {
                 snapshot.docChanges().forEach(change => {
-                    const data = change.doc.data();
-                    const pixelElement = document.getElementById(`pixel-${data.x}-${data.y}`);
-                    if (!pixelElement) return;
-
-                    const isViewedUserPixel = data.userId === viewedUserId;
-
-                    if (change.type === "added" || change.type === "modified") {
-                        if (pendingPixel && pendingPixel.x === data.x && pendingPixel.y === data.y) {
-                        } else {
-                           pixelElement.style.backgroundColor = data.color;
-                        }
-                        if (viewedUserId) pixelElement.classList.toggle('other-user', !isViewedUserPixel);
-                    } else if (change.type === "removed") {
-                        pixelElement.style.backgroundColor = '#4a5568';
-                        if (viewedUserId) pixelElement.classList.remove('other-user');
-                    }
+                    allUsers.set(change.doc.id, { ...allUsers.get(change.doc.id), ...change.doc.data() });
                 });
-            }, error => console.error("Error listening to pixel changes:", error));
+                renderUserList();
+            });
+            onSnapshot(adminsRef, (snapshot) => {
+                const adminIds = new Set(snapshot.docs.map(d => d.id));
+                allUsers.forEach(user => user.isAdmin = adminIds.has(user.uid) || user.uid === SUPER_ADMIN_UID);
+                renderUserList();
+            });
+            onSnapshot(bannedRef, (snapshot) => {
+                const bannedIds = new Set(snapshot.docs.map(d => d.id));
+                allUsers.forEach(user => user.isBanned = bannedIds.has(user.uid));
+                renderUserList();
+            });
+        }
+
+        function renderUserList() {
+            const searchTerm = ui.userSearchInput.value.toLowerCase();
+            ui.userListContainer.innerHTML = '';
+            
+            const usersToDisplay = Array.from(allUsers.values()).filter(user => 
+                (user.uid && user.uid.toLowerCase().includes(searchTerm)) || 
+                (user.displayName && user.displayName.toLowerCase().includes(searchTerm))
+            );
+            
+            if (usersToDisplay.length === 0) {
+                 ui.userListContainer.innerHTML = `<p class="text-gray-500">No users found.</p>`;
+                 return;
+            }
+
+            usersToDisplay.sort((a,b) => (b.lastSeen?.toMillis() || 0) - (a.lastSeen?.toMillis() || 0));
+
+            usersToDisplay.forEach(user => {
+                const userElement = document.createElement('div');
+                userElement.className = 'flex flex-wrap items-center justify-between bg-gray-700 p-3 rounded-md gap-2';
+                
+                const isOnline = user.lastSeen && user.lastSeen.toDate && (new Date() - user.lastSeen.toDate()) < ONLINE_THRESHOLD_MS;
+                const onlineIndicator = `<div class="${isOnline ? 'online-indicator' : 'offline-indicator'}" title="${isOnline ? 'Online' : 'Offline'}"></div>`;
+
+                let buttons = `
+                    <a href="./index.html?viewUser=${user.uid}" class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold py-1 px-3 rounded-md">View Pixels</a>
+                `;
+
+                if (user.uid !== SUPER_ADMIN_UID) { // Super admin cannot be banned/promoted
+                    buttons += `<button data-uid="${user.uid}" class="${user.isBanned ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-red-600 hover:bg-red-700'} text-white text-sm font-bold py-1 px-3 rounded-md toggle-ban-btn">
+                        ${user.isBanned ? 'Unban' : 'Ban'}
+                    </button>`;
+                    
+                    if (currentUserRole === 'super' && !user.isAdmin) {
+                        buttons += `<button data-uid="${user.uid}" class="bg-green-500 hover:bg-green-600 text-white text-sm font-bold py-1 px-3 rounded-md promote-admin-btn">Promote</button>`;
+                    }
+                }
+                
+                let roleBadge = user.isAdmin ? `<span class="text-xs font-bold uppercase ${user.uid === SUPER_ADMIN_UID ? 'text-red-400' : 'text-yellow-400'}">${user.uid === SUPER_ADMIN_UID ? 'Super Admin' : 'Admin'}</span>` : '';
+
+                userElement.innerHTML = `
+                    <div class="flex-grow min-w-0">
+                        <div class="flex items-center gap-2">
+                            ${onlineIndicator}
+                            <span class="font-semibold">${user.displayName || 'Unknown User'}</span>
+                            ${roleBadge}
+                        </div>
+                        <span class="font-mono text-xs text-gray-400 break-all">${user.uid}</span>
+                    </div>
+                    <div class="flex gap-2 flex-shrink-0">${buttons}</div>
+                `;
+                ui.userListContainer.appendChild(userElement);
+            });
+            
+            document.querySelectorAll('.toggle-ban-btn').forEach(b => b.addEventListener('click', toggleBan));
+            document.querySelectorAll('.promote-admin-btn').forEach(b => b.addEventListener('click', promoteToAdmin));
+        }
+
+        async function loadAdminList() {
+            if (currentUserRole !== 'super') return;
+            const adminsRef = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
+            onSnapshot(adminsRef, (snapshot) => {
+                ui.adminListContainer.innerHTML = '';
+                snapshot.forEach(doc => {
+                    const adminData = allUsers.get(doc.id);
+                    const displayName = adminData ? adminData.displayName : 'Unknown Admin';
+                    const adminElement = document.createElement('div');
+                    adminElement.className = 'flex items-center justify-between bg-gray-700 p-3 rounded-md';
+                    adminElement.innerHTML = `
+                        <div>
+                            <div class="font-semibold">${displayName}</div>
+                            <span class="font-mono text-xs text-gray-400">${doc.id}</span>
+                        </div>
+                        <button data-uid="${doc.id}" class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-1 px-3 rounded-md remove-admin-btn">Remove</button>
+                    `;
+                    ui.adminListContainer.appendChild(adminElement);
+                });
+                document.querySelectorAll('.remove-admin-btn').forEach(b => b.addEventListener('click', removeAdmin));
+            });
         }
         
+        function promoteToAdmin(e) {
+            if (currentUserRole !== 'super') return;
+            const uid = e.target.dataset.uid;
+            showConfirmationModal(
+                `Promote User?`,
+                `Are you sure you want to promote ${allUsers.get(uid)?.displayName || uid} to a regular admin?`,
+                async () => {
+                    const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
+                    await setDoc(adminDocRef, { promotedAt: new Date(), promotedBy: auth.currentUser.uid });
+                    showNotice('User promoted to admin.', 'success');
+                }
+            );
+        }
+
+        async function addAdmin() {
+            if (currentUserRole !== 'super') return;
+            const uid = ui.addAdminUidInput.value.trim();
+            if (!uid) return showNotice("Please enter a User ID.");
+            if (uid === SUPER_ADMIN_UID) return showNotice("Cannot modify super admin.");
+            const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
+            await setDoc(adminDocRef, { addedAt: new Date(), addedBy: auth.currentUser.uid });
+            ui.addAdminUidInput.value = '';
+            showNotice('Admin added successfully.', 'success');
+        }
+
+        function removeAdmin(e) {
+            if (currentUserRole !== 'super') return;
+            const uid = e.target.dataset.uid;
+             showConfirmationModal(
+                `Remove Admin?`,
+                `Are you sure you want to remove admin privileges for ${allUsers.get(uid)?.displayName || uid}?`,
+                async () => {
+                    const adminDocRef = doc(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`, uid);
+                    await deleteDoc(adminDocRef);
+                    showNotice('Admin privileges removed.', 'success');
+                }
+            );
+        }
+        
+        function toggleBan(e) {
+            const uid = e.target.dataset.uid;
+            const user = allUsers.get(uid);
+            if (!user) return;
+            const banDocRef = doc(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`, uid);
+            
+            if (user.isBanned) {
+                showConfirmationModal(
+                    `Unban User?`, `Are you sure you want to unban ${user.displayName || uid}?`,
+                    async () => { await deleteDoc(banDocRef); showNotice('User unbanned.', 'success'); }
+                );
+            } else {
+                showConfirmationModal(
+                    `Ban User?`, `Are you sure you want to ban ${user.displayName || uid}?`,
+                    async () => { await setDoc(banDocRef, { bannedAt: new Date(), bannedBy: auth.currentUser.uid }); showNotice('User banned.', 'success');}
+                );
+            }
+        }
+        
+        function clearCanvas() {
+            if (currentUserRole !== 'super') return;
+            showConfirmationModal(
+                'ERASE ENTIRE CANVAS?',
+                'This will permanently delete all pixels from the canvas. This action cannot be undone.',
+                async () => {
+                    ui.loadingOverlay.classList.remove('hidden');
+                    const pixelsRef = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
+                    const snapshot = await getDocs(pixelsRef);
+                    const batch = writeBatch(db);
+                    snapshot.docs.forEach(d => batch.delete(d.ref));
+                    await batch.commit();
+                    ui.loadingOverlay.classList.add('hidden');
+                    showNotice("Canvas has been cleared.", "success");
+                }
+            );
+        }
+
         initialize();
     </script>
 </body>
