@@ -140,6 +140,7 @@
                     if (presenceInterval) clearInterval(presenceInterval);
 
                     if (user) {
+                        let isBanned;
                         [isBanned, isAdmin] = await Promise.all([checkBanStatus(user.uid), checkAdminStatus(user.uid)]);
                         
                         if (isBanned) {
