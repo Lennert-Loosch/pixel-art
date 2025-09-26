@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Pixel Canvas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the pixel grid and UI elements */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c; /* A dark theme for better contrast */
+        }
+        /* New viewport container */
+        .canvas-viewport {
+            width: 95vmin;
+            height: 76vmin;
+            border: 2px solid #4a5568;
+            background-color: #2d3748;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            overflow: hidden; /* Crucial for containing the larger canvas */
+            cursor: grab;
+            position: relative;
+        }
+        .canvas-viewport.panning {
+            cursor: grabbing;
+        }
+
+        /* Modified pixel grid for pan and zoom */
+        .pixel-grid {
+            display: grid;
+            grid-template-columns: repeat(100, 15px); /* Larger, more square grid */
+            grid-template-rows: repeat(76, 15px);
+            transform-origin: 0 0; /* Set transform origin for zooming */
+            will-change: transform; /* Performance hint for the browser */
+        }
+
+        .pixel {
+            width: 15px; /* Fixed pixel size */
+            height: 15px;
+            background-color: #4a5568; /* Default empty pixel color */
+            border: 1px solid #2d3748;
+            /* Hover effect is less useful with pan/zoom, but we can keep it */
+            transition: transform 0.1s ease-in-out;
+        }
+        .pixel:hover {
+            transform: scale(1.2);
+            z-index: 10;
+        }
+        .color-swatch {
+            width: 40px;
+            height: 40px;
+            cursor: pointer;
+            border: 3px solid transparent;
+            transition: border-color 0.2s ease-in-out;
+        }
+        .color-swatch.selected, .eraser.selected {
+            border-color: #63b3ed; /* A highlight color for the selected tool */
+            box-shadow: 0 0 0 3px rgba(99, 179, 237, 0.5);
+        }
+        .eraser {
+             border: 3px solid transparent;
+        }
+        /* Loading Spinner */
+        .loader {
+            border: 8px solid #f3f3f3;
+            border-top: 8px solid #3498db;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+     <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-80 flex flex-col items-center justify-center z-50 p-4">
+        <div class="loader"></div>
+        <p class="mt-4 text-lg">Connecting to the canvas...</p>
+    </div>
+
+    <div class="w-full max-w-7xl mx-auto flex flex-col lg:flex-row items-center justify-center gap-8">
+        <!-- Pixel Canvas Viewport -->
+        <div id="canvas-viewport" class="canvas-viewport rounded-lg">
+            <div id="pixel-grid" class="pixel-grid"></div>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex flex-col items-center gap-6 bg-gray-800 p-6 rounded-xl shadow-lg">
+            <h1 class="text-3xl font-bold text-center">Live Pixel Canvas</h1>
+            <p class="text-sm text-gray-400 text-center">Drag to move. Scroll to zoom. Hold 'F' to draw.</p>
+
+            <div id="color-palette" class="grid grid-cols-5 gap-3">
+                <!-- Color swatches will be inserted here by JavaScript -->
+            </div>
+
+            <button id="eraser" class="eraser w-full py-3 px-4 bg-gray-700 hover:bg-gray-600 rounded-lg text-lg font-semibold transition-all duration-200 flex items-center justify-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 17a1 1 0 0 0 1 1H15a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1H3.5a1 1 0 0 0-1 1v8z"></path><path d="M15 8V6a2 2 0 0 0-2-2H8.5L6.5 2H4a2 2 0 0 0-2 2v2"></path><path d="M21 17h-1"></path><path d="M21 13h-4"></path><path d="M21 9h-2"></path></svg>
+                Eraser
+            </button>
+            <div class="text-xs text-gray-500 text-center">
+                Your User ID: <span id="user-id" class="font-mono"></span>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Import Firebase modules
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Configuration ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'live-pixel-canvas';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4",
+            authDomain: "pixel-ed9f4.firebaseapp.com",
+            projectId: "pixel-ed9f4",
+            storageBucket: "pixel-ed9f4.firebasestorage.app",
+            messagingSenderId: "61835815357",
+            appId: "1:61835815357:web:579d025b165c1edcbc8ad4"
+        };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+
+        // --- App Constants ---
+        const GRID_WIDTH = 100; // Increased grid size
+        const GRID_HEIGHT = 76;
+        const PIXEL_SIZE = 15; // px
+        const PIXEL_COLLECTION_NAME = 'pixels';
+        const COLORS = [
+            '#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000',
+            '#FF4500', '#FFA800', '#FFD635', '#00A368',
+            '#7EED56', '#2450A4', '#3690EA', '#51E9F4',
+            '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'
+        ];
+
+        // --- App State ---
+        let selectedColor = COLORS[0];
+        let isErasing = false;
+        let userId = null;
+        let db, auth;
+        let isAppSetup = false;
+        let isFreeDrawing = false;
+        
+        // --- Pan & Zoom State ---
+        let scale = 1;
+        let panX = 0;
+        let panY = 0;
+        let isPanning = false;
+        let startPanX = 0;
+        let startPanY = 0;
+        let mousedownX = 0;
+        let mousedownY = 0;
+        const DRAG_THRESHOLD = 5; // Pixels mouse must move to be considered a drag
+
+        // --- DOM Elements ---
+        const viewport = document.getElementById('canvas-viewport');
+        const grid = document.getElementById('pixel-grid');
+        const colorPalette = document.getElementById('color-palette');
+        const eraserButton = document.getElementById('eraser');
+        const userIdDisplay = document.getElementById('user-id');
+        const loadingOverlay = document.getElementById('loading-overlay');
+
+        // --- Utility Functions ---
+        /**
+         * Converts a hex color string to an rgb string.
+         * @param {string} hex The hex color to convert.
+         * @returns {string|null} The rgb color string or null if invalid.
+         */
+        function hexToRgb(hex) {
+            if (!hex || typeof hex !== 'string') return null;
+            let shorthandRegex = /^#?([a-f\d])([a-f\d])([a-f\d])$/i;
+            hex = hex.replace(shorthandRegex, function(m, r, g, b) {
+                return r + r + g + g + b + b;
+            });
+
+            let result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? `rgb(${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)})` : null;
+        }
+
+        // --- Main App Logic ---
+
+        /**
+         * Initializes the application, sets up Firebase, and authenticates the user.
+         */
+        async function initialize() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('debug');
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        userIdDisplay.textContent = userId;
+                        console.log("User authenticated with ID:", userId);
+                        if (!isAppSetup) {
+                            setupApp();
+                            isAppSetup = true;
+                        }
+                    } else {
+                        console.log("No user signed in, attempting to sign in.");
+                        try {
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(auth, initialAuthToken);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        } catch (authError) {
+                            handleAuthError(authError);
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Firebase Initialization Error:", error);
+                loadingOverlay.innerHTML = '<p class="text-red-500">Error connecting to Firebase.</p>';
+            }
+        }
+        
+        /**
+         * Centralized function to handle different authentication errors.
+         */
+        function handleAuthError(authError) {
+            console.error("Firebase Sign-In Error:", authError);
+            if (authError.code === 'auth/configuration-not-found') {
+                loadingOverlay.innerHTML = `...`; // Error message remains the same
+            } else {
+                loadingOverlay.innerHTML = `<p class="text-red-500">An unknown authentication error occurred.</p>`;
+            }
+        }
+
+        /**
+         * Sets up the grid, palette, listeners, and fetches initial data.
+         */
+        function setupApp() {
+            createGrid();
+            createColorPalette();
+            setupEventListeners();
+            listenForPixelChanges();
+            centerCanvas();
+        }
+        
+        /**
+         * Creates the HTML elements for the pixel grid.
+         */
+        function createGrid() {
+            grid.innerHTML = '';
+            for (let y = 0; y < GRID_HEIGHT; y++) {
+                for (let x = 0; x < GRID_WIDTH; x++) {
+                    const pixel = document.createElement('div');
+                    pixel.classList.add('pixel');
+                    pixel.dataset.x = x;
+                    pixel.dataset.y = y;
+                    pixel.id = `pixel-${x}-${y}`;
+                    grid.appendChild(pixel);
+                }
+            }
+        }
+        
+        /**
+         * Center the canvas initially in the viewport.
+         */
+        function centerCanvas() {
+            const viewportRect = viewport.getBoundingClientRect();
+            const gridRect = grid.getBoundingClientRect();
+            scale = Math.min(viewportRect.width / gridRect.width, viewportRect.height / gridRect.height) * 0.9;
+            panX = (viewportRect.width - (gridRect.width * scale)) / 2;
+            panY = (viewportRect.height - (gridRect.height * scale)) / 2;
+            updateTransform();
+        }
+
+        /**
+         * Applies the current pan and zoom state to the grid's CSS transform.
+         */
+        function updateTransform() {
+            grid.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        }
+
+        /**
+         * Creates the color swatch elements in the palette.
+         */
+        function createColorPalette() {
+            colorPalette.innerHTML = '';
+            COLORS.forEach(color => {
+                const swatch = document.createElement('div');
+                swatch.classList.add('color-swatch', 'rounded-full');
+                swatch.style.backgroundColor = color;
+                swatch.dataset.color = color;
+                if (color === selectedColor) {
+                    swatch.classList.add('selected');
+                }
+                colorPalette.appendChild(swatch);
+            });
+        }
+
+        /**
+         * Sets up all the necessary event listeners for user interaction.
+         */
+        function setupEventListeners() {
+            // Palette clicks
+            colorPalette.addEventListener('click', (e) => {
+                const swatch = e.target.closest('.color-swatch');
+                if (!swatch) return;
+                selectedColor = swatch.dataset.color;
+                isErasing = false;
+                updateSelectedToolUI();
+            });
+
+            // Eraser click
+            eraserButton.addEventListener('click', () => {
+                isErasing = !isErasing;
+                updateSelectedToolUI();
+            });
+
+            // Pan and Zoom Listeners
+            viewport.addEventListener('mousedown', onPanStart);
+            window.addEventListener('mousemove', onPanMove);
+            window.addEventListener('mouseup', onPanEnd);
+            viewport.addEventListener('wheel', onZoom);
+
+            // Free-draw Listeners
+            window.addEventListener('keydown', (e) => {
+                if (e.key.toLowerCase() === 'f') isFreeDrawing = true;
+            });
+            window.addEventListener('keyup', (e) => {
+                if (e.key.toLowerCase() === 'f') isFreeDrawing = false;
+            });
+            grid.addEventListener('mousemove', (e) => {
+                if (!isFreeDrawing || isPanning) return; // Only draw when F is held and not panning
+                
+                const pixel = e.target.closest('.pixel');
+                if (pixel && userId) {
+                    const x = parseInt(pixel.dataset.x);
+                    const y = parseInt(pixel.dataset.y);
+
+                    if (isErasing) {
+                        // Only delete if the pixel is not already the default color
+                        if (pixel.style.backgroundColor !== 'rgb(74, 85, 104)') {
+                            deletePixel(x, y);
+                        }
+                    } else {
+                        // Only paint if the pixel is not already the selected color
+                        const targetRgb = hexToRgb(selectedColor);
+                        if (pixel.style.backgroundColor !== targetRgb) {
+                            placePixel(x, y, selectedColor);
+                        }
+                    }
+                }
+            });
+        }
+
+        function onPanStart(e) {
+            e.preventDefault();
+            isPanning = true;
+            viewport.classList.add('panning');
+            startPanX = e.clientX - panX;
+            startPanY = e.clientY - panY;
+            mousedownX = e.clientX;
+            mousedownY = e.clientY;
+        }
+
+        function onPanMove(e) {
+            if (!isPanning) return;
+            e.preventDefault();
+            panX = e.clientX - startPanX;
+            panY = e.clientY - startPanY;
+            updateTransform();
+        }
+
+        function onPanEnd(e) {
+            if (!isPanning) return;
+            isPanning = false;
+            viewport.classList.remove('panning');
+
+            const distMoved = Math.hypot(e.clientX - mousedownX, e.clientY - mousedownY);
+
+            if (distMoved < DRAG_THRESHOLD) {
+                // This was a click, not a drag. Place a pixel.
+                const pixel = e.target.closest('.pixel');
+                if (pixel && userId) {
+                    const x = parseInt(pixel.dataset.x);
+                    const y = parseInt(pixel.dataset.y);
+                    if (isErasing) {
+                        deletePixel(x, y);
+                    } else {
+                        placePixel(x, y, selectedColor);
+                    }
+                }
+            }
+        }
+
+        function onZoom(e) {
+            e.preventDefault();
+            const zoomFactor = 1.1;
+            const newScale = e.deltaY > 0 ? scale / zoomFactor : scale * zoomFactor;
+            const clampedScale = Math.max(0.2, Math.min(newScale, 10)); // Min/max zoom
+
+            const viewportRect = viewport.getBoundingClientRect();
+            const mouseX = e.clientX - viewportRect.left;
+            const mouseY = e.clientY - viewportRect.top;
+
+            // Adjust pan to zoom towards the cursor
+            panX = mouseX - (mouseX - panX) * (clampedScale / scale);
+            panY = mouseY - (mouseY - panY) * (clampedScale / scale);
+            
+            scale = clampedScale;
+            updateTransform();
+        }
+        
+        function updateSelectedToolUI() {
+            document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+            if (isErasing) {
+                eraserButton.classList.add('selected');
+            } else {
+                eraserButton.classList.remove('selected');
+                const activeSwatch = document.querySelector(`.color-swatch[data-color="${selectedColor}"]`);
+                if (activeSwatch) activeSwatch.classList.add('selected');
+            }
+        }
+
+        async function placePixel(x, y, color) {
+            if (!userId) return;
+            try {
+                const pixelId = `${x}-${y}`;
+                const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, pixelId);
+                await setDoc(docRef, { x, y, color, userId });
+            } catch (error) {
+                console.error("Error placing pixel: ", error);
+            }
+        }
+
+        async function deletePixel(x, y) {
+             if (!userId) return;
+            try {
+                const pixelId = `${x}-${y}`;
+                const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, pixelId);
+                await deleteDoc(docRef);
+            } catch (error) {
+                console.error("Error deleting pixel: ", error);
+            }
+        }
+
+        function listenForPixelChanges() {
+            const collectionRef = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
+            onSnapshot(collectionRef, (snapshot) => {
+                snapshot.docChanges().forEach((change) => {
+                    const data = change.doc.data();
+                    const pixelElement = document.getElementById(`pixel-${data.x}-${data.y}`);
+                    if (!pixelElement) return;
+
+                    if (change.type === "added" || change.type === "modified") {
+                        pixelElement.style.backgroundColor = data.color;
+                    } else if (change.type === "removed") {
+                        pixelElement.style.backgroundColor = '#4a5568';
+                    }
+                });
+
+                if (!loadingOverlay.classList.contains('hidden')) {
+                    loadingOverlay.classList.add('hidden');
+                }
+            }, (error) => {
+                console.error("Error listening to pixel changes:", error);
+                if (error.code === 'permission-denied') {
+                   loadingOverlay.innerHTML = `...`; // Error message remains the same
+                } else {
+                    loadingOverlay.innerHTML = '<p class="text-red-500">Error fetching canvas data.</p>';
+                }
+            });
+        }
+        
+        initialize();
+    </script>
+</body>
+</html>
+
