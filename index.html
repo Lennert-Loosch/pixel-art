@@ -109,7 +109,7 @@
         const COLORS = ['#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000', '#FF4500', '#FFA800', '#FFD635', '#00A368', '#7EED56', '#2450A4', '#3690EA', '#51E9F4', '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'];
         
         let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval, isAdmin = false;
-        let viewedUserId = null, pendingPixel = null, lastPlacementTime = 0, cooldownInterval;
+        let viewedUserId = null, pendingPixel = null, lastPlacementTime = 0, cooldownInterval, userDocUnsub = null;
         let isFreeDrawing = false;
         let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
         const DRAG_THRESHOLD = 5;
@@ -136,6 +136,7 @@
                 auth = getAuth(app);
                 
                 onAuthStateChanged(auth, async (user) => {
+                    if (userDocUnsub) { userDocUnsub(); userDocUnsub = null; }
                     ui.loadingOverlay.classList.add('hidden');
                     if (presenceInterval) clearInterval(presenceInterval);
 
@@ -146,6 +147,19 @@
                             return;
                         }
                         
+                        const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, user.uid);
+                        userDocUnsub = onSnapshot(userDocRef, (docSnap) => {
+                            if (docSnap.exists()) {
+                                const serverLastPlacement = docSnap.data().lastPlacementTime?.toMillis();
+                                if(serverLastPlacement) {
+                                    const elapsed = Date.now() - serverLastPlacement;
+                                    if (elapsed < PIXEL_COOLDOWN_S * 1000) {
+                                        startCooldown(serverLastPlacement);
+                                    }
+                                }
+                            }
+                        });
+
                         updateUserPresence(user);
                         presenceInterval = setInterval(() => updateUserPresence(user), 60000);
 
@@ -335,20 +349,27 @@
             updateTransform();
         }
 
-        function startCooldown() {
+        function startCooldown(startTime) {
             if (isAdmin) return;
-            lastPlacementTime = Date.now();
-            ui.cooldownTimer.classList.remove('hidden');
-            let secondsLeft = PIXEL_COOLDOWN_S;
-            ui.cooldownSeconds.textContent = secondsLeft;
-            cooldownInterval = setInterval(() => {
-                secondsLeft--;
-                ui.cooldownSeconds.textContent = secondsLeft;
-                if (secondsLeft <= 0) {
-                    clearInterval(cooldownInterval);
+            if (cooldownInterval) clearInterval(cooldownInterval);
+
+            lastPlacementTime = startTime || Date.now();
+
+            const timerTick = () => {
+                const elapsed = Date.now() - lastPlacementTime;
+                const secondsLeft = Math.ceil((PIXEL_COOLDOWN_S * 1000 - elapsed) / 1000);
+                
+                if (secondsLeft > 0) {
+                    ui.cooldownTimer.classList.remove('hidden');
+                    ui.cooldownSeconds.textContent = secondsLeft;
+                } else {
                     ui.cooldownTimer.classList.add('hidden');
+                    clearInterval(cooldownInterval);
                 }
-            }, 1000);
+            };
+            
+            timerTick(); 
+            cooldownInterval = setInterval(timerTick, 1000);
         }
         
         function initiatePlacement(x, y, isAutoConfirm = false) {
@@ -378,14 +399,21 @@
             }
         }
         
-        function confirmPlacement() {
+        async function confirmPlacement() {
             if (!pendingPixel) return;
             const { x, y, color } = pendingPixel;
-            if (color === null) deletePixel(x, y);
-            else placePixel(x, y, color);
+            
+            if (color === null) {
+                await deletePixel(x, y);
+            } else {
+                await placePixel(x, y, color);
+            }
             
             startCooldown();
             
+            const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, userId);
+            await setDoc(userDocRef, { lastPlacementTime: serverTimestamp() }, { merge: true });
+
             const pixelEl = document.getElementById(`pixel-${x}-${y}`);
             if(pixelEl) pixelEl.classList.remove('pending');
 
