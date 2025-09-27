@@ -108,7 +108,7 @@
         const PIXEL_COOLDOWN_S = 10;
         const COLORS = ['#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000', '#FF4500', '#FFA800', '#FFD635', '#00A368', '#7EED56', '#2450A4', '#3690EA', '#51E9F4', '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'];
         
-        let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval, isAdmin = false;
+        let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval, isAdmin = false, isUserDataLoaded = false;
         let viewedUserId = null, pendingPixel = null, lastPlacementTime = 0, cooldownInterval, userDocUnsub = null;
         let isFreeDrawing = false;
         let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
@@ -136,7 +136,8 @@
                 auth = getAuth(app);
                 
                 onAuthStateChanged(auth, async (user) => {
-                    if (userDocUnsub) { userDocUnsub(); userDocUnsub = null; }
+                    isUserDataLoaded = false;
+                    if (userDocUnsub) userDocUnsub();
                     if (cooldownInterval) clearInterval(cooldownInterval);
                     if (presenceInterval) clearInterval(presenceInterval);
                     
@@ -150,19 +151,14 @@
                         }
                         
                         const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, user.uid);
-                        const initialDocSnap = await getDoc(userDocRef);
-                        if (initialDocSnap.exists()) {
-                            const serverLastPlacement = initialDocSnap.data().lastPlacementTime?.toMillis();
-                            if (serverLastPlacement) {
-                                lastPlacementTime = serverLastPlacement;
-                                handleCooldownUI(serverLastPlacement);
-                            }
-                        }
-
+                        
                         userDocUnsub = onSnapshot(userDocRef, (docSnap) => {
                              if (docSnap.exists()) {
                                 const serverLastPlacement = docSnap.data().lastPlacementTime?.toMillis();
-                                if (serverLastPlacement) lastPlacementTime = serverLastPlacement;
+                                if (serverLastPlacement) {
+                                    lastPlacementTime = serverLastPlacement;
+                                    handleCooldownUI(serverLastPlacement);
+                                }
                             }
                         });
                         
@@ -178,12 +174,15 @@
                         ui.loginContainer.classList.add('hidden');
                         ui.appContainer.classList.remove('hidden');
                         ui.logoutBtn.classList.remove('hidden');
-                        ui.loadingOverlay.classList.add('hidden');
-
+                        
                         if (!isAppSetup) {
                             setupApp();
                             isAppSetup = true;
                         }
+
+                        isUserDataLoaded = true;
+                        ui.loadingOverlay.classList.add('hidden');
+
                     } else {
                         userId = null;
                         isAdmin = false;
@@ -379,9 +378,13 @@
         }
         
         function initiatePlacement(x, y, isAutoConfirm = false) {
-            if (!userId || viewedUserId) return;
+            if (!userId || viewedUserId || !isUserDataLoaded) return;
             const timeSinceLast = Date.now() - lastPlacementTime;
-            if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) return;
+            
+            if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
+                handleCooldownUI(lastPlacementTime); // Re-show timer if user clicks early
+                return;
+            }
 
             if (pendingPixel) cancelPlacement();
             
@@ -403,7 +406,6 @@
         async function confirmPlacement() {
             if (!pendingPixel) return;
             
-            // Re-check cooldown right before placing to be extra safe
             const timeSinceLast = Date.now() - lastPlacementTime;
             if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
                  showError(`Please wait ${Math.ceil((PIXEL_COOLDOWN_S * 1000 - timeSinceLast) / 1000)}s`);
@@ -412,14 +414,9 @@
             }
             
             const { x, y, color } = pendingPixel;
-            
-            const newPlacementTime = serverTimestamp();
             const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, userId);
-            setDoc(userDocRef, { lastPlacementTime: newPlacementTime }, { merge: true });
             
-            // Set local time immediately to prevent client-side race conditions
-            lastPlacementTime = Date.now();
-            handleCooldownUI(lastPlacementTime);
+            await setDoc(userDocRef, { lastPlacementTime: serverTimestamp() }, { merge: true });
 
             if (color === null) {
                 await deletePixel(x, y);
@@ -463,7 +460,6 @@
                     [`pixels.${x}`]: { color, userId }
                 });
             } catch (e) {
-                // If update fails, it's likely the doc doesn't exist, so we create it.
                 await setDoc(rowDocRef, { 
                     pixels: { [x]: { color, userId } }
                 }, { merge: true });
