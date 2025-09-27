@@ -316,10 +316,14 @@
                     <a href="./index.html?viewUser=${user.uid}" class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold py-1 px-3 rounded-md">View Pixels</a>
                 `;
 
-                if (user.uid !== SUPER_ADMIN_UID) { // Super admin cannot be banned/promoted
-                    buttons += `<button data-uid="${user.uid}" class="${user.isBanned ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-red-600 hover:bg-red-700'} text-white text-sm font-bold py-1 px-3 rounded-md toggle-ban-btn">
-                        ${user.isBanned ? 'Unban' : 'Ban'}
-                    </button>`;
+                // Logic for showing ban/promote buttons
+                if (user.uid !== SUPER_ADMIN_UID && user.uid !== auth.currentUser.uid) { 
+                    // Super admin can ban regular admins, but regular admins cannot ban anyone.
+                    if (currentUserRole === 'super' || !user.isAdmin) {
+                         buttons += `<button data-uid="${user.uid}" class="${user.isBanned ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-red-600 hover:bg-red-700'} text-white text-sm font-bold py-1 px-3 rounded-md toggle-ban-btn">
+                            ${user.isBanned ? 'Unban' : 'Ban'}
+                        </button>`;
+                    }
                     
                     if (currentUserRole === 'super' && !user.isAdmin) {
                         buttons += `<button data-uid="${user.uid}" class="bg-green-500 hover:bg-green-600 text-white text-sm font-bold py-1 px-3 rounded-md promote-admin-btn">Promote</button>`;
