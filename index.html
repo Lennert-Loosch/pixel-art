@@ -138,24 +138,34 @@
                 onAuthStateChanged(auth, async (user) => {
                     if (userDocUnsub) { userDocUnsub(); userDocUnsub = null; }
                     if (cooldownInterval) clearInterval(cooldownInterval);
-                    ui.loadingOverlay.classList.add('hidden');
                     if (presenceInterval) clearInterval(presenceInterval);
-
+                    
                     if (user) {
+                        ui.loadingOverlay.classList.remove('hidden');
                         const isBanned = await checkBanStatus(user.uid);
                         if (isBanned) {
                             showBannedMessage();
+                            ui.loadingOverlay.classList.add('hidden');
                             return;
                         }
                         
                         const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, user.uid);
+                        const initialDocSnap = await getDoc(userDocRef);
+                        if (initialDocSnap.exists()) {
+                            const serverLastPlacement = initialDocSnap.data().lastPlacementTime?.toMillis();
+                            if (serverLastPlacement) {
+                                lastPlacementTime = serverLastPlacement;
+                                handleCooldownUI(serverLastPlacement);
+                            }
+                        }
+
                         userDocUnsub = onSnapshot(userDocRef, (docSnap) => {
-                            if (docSnap.exists()) {
+                             if (docSnap.exists()) {
                                 const serverLastPlacement = docSnap.data().lastPlacementTime?.toMillis();
-                                if (serverLastPlacement) handleCooldownUI(serverLastPlacement);
+                                if (serverLastPlacement) lastPlacementTime = serverLastPlacement;
                             }
                         });
-
+                        
                         updateUserPresence(user);
                         presenceInterval = setInterval(() => updateUserPresence(user), 60000);
 
@@ -168,6 +178,7 @@
                         ui.loginContainer.classList.add('hidden');
                         ui.appContainer.classList.remove('hidden');
                         ui.logoutBtn.classList.remove('hidden');
+                        ui.loadingOverlay.classList.add('hidden');
 
                         if (!isAppSetup) {
                             setupApp();
@@ -181,6 +192,7 @@
                         ui.logoutBtn.classList.add('hidden');
                         ui.adminBtn.classList.add('hidden');
                         ui.bannedContainer.classList.add('hidden');
+                        ui.loadingOverlay.classList.add('hidden');
                     }
                 });
 
@@ -349,10 +361,9 @@
         function handleCooldownUI(serverTime) {
             if (isAdmin) return;
             if (cooldownInterval) clearInterval(cooldownInterval);
-            lastPlacementTime = serverTime || 0;
-
+            
             const timerTick = () => {
-                const elapsed = Date.now() - lastPlacementTime;
+                const elapsed = Date.now() - serverTime;
                 if (elapsed < PIXEL_COOLDOWN_S * 1000) {
                     const secondsLeft = Math.ceil((PIXEL_COOLDOWN_S * 1000 - elapsed) / 1000);
                     ui.cooldownTimer.classList.remove('hidden');
@@ -391,11 +402,24 @@
         
         async function confirmPlacement() {
             if (!pendingPixel) return;
+            
+            // Re-check cooldown right before placing to be extra safe
+            const timeSinceLast = Date.now() - lastPlacementTime;
+            if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
+                 showError(`Please wait ${Math.ceil((PIXEL_COOLDOWN_S * 1000 - timeSinceLast) / 1000)}s`);
+                 cancelPlacement();
+                 return;
+            }
+            
             const { x, y, color } = pendingPixel;
             
-            // This is the server update, which will trigger the snapshot listener to update the cooldown UI
+            const newPlacementTime = serverTimestamp();
             const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, userId);
-            await setDoc(userDocRef, { lastPlacementTime: serverTimestamp() }, { merge: true });
+            setDoc(userDocRef, { lastPlacementTime: newPlacementTime }, { merge: true });
+            
+            // Set local time immediately to prevent client-side race conditions
+            lastPlacementTime = Date.now();
+            handleCooldownUI(lastPlacementTime);
 
             if (color === null) {
                 await deletePixel(x, y);
