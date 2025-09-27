@@ -114,6 +114,7 @@
         let currentUserRole = null; // null, 'regular', or 'super'
         let allUsers = new Map(); // For caching user data
         let confirmCallback = null;
+        let initialDataLoaded = false;
 
         const ui = {
             loadingOverlay: document.getElementById('loading-overlay'), accessDenied: document.getElementById('access-denied'), adminDashboard: document.getElementById('admin-dashboard'), adminLoginBtn: document.getElementById('admin-login-btn'), adminLogoutBtn: document.getElementById('admin-logout-btn'), userListContainer: document.getElementById('user-list'), adminListContainer: document.getElementById('admin-list'), addAdminUidInput: document.getElementById('add-admin-uid'), addAdminBtn: document.getElementById('add-admin-btn'), adminManagementTab: document.getElementById('admin-management-tab'), canvasManagementTab: document.getElementById('canvas-management-tab'), clearCanvasBtn: document.getElementById('clear-canvas-btn'), userSearchInput: document.getElementById('user-search'), welcomeMessage: document.getElementById('welcome-message'), tabs: document.querySelectorAll('.tab'), tabContents: document.querySelectorAll('.tab-content'),
@@ -127,19 +128,20 @@
                 auth = getAuth(app);
 
                 onAuthStateChanged(auth, async (user) => {
-                    ui.loadingOverlay.classList.add('hidden');
                     if (user) await checkUserRole(user);
                     else {
                         currentUserRole = null;
+                        initialDataLoaded = false;
                         showAccessDenied();
                     }
+                    ui.loadingOverlay.classList.add('hidden');
                 });
 
                 ui.adminLoginBtn.addEventListener('click', () => signInWithPopup(auth, new GoogleAuthProvider()));
                 ui.adminLogoutBtn.addEventListener('click', () => signOut(auth));
                 ui.addAdminBtn.addEventListener('click', addAdmin);
                 ui.clearCanvasBtn.addEventListener('click', clearCanvas);
-                ui.userSearchInput.addEventListener('input', renderUserList);
+                ui.userSearchInput.addEventListener('input', () => { renderUserList(); loadAdminList(); });
                 ui.modalConfirmBtn.addEventListener('click', handleConfirm);
                 ui.modalCancelBtn.addEventListener('click', hideConfirmationModal);
                 setupTabs();
@@ -148,6 +150,27 @@
                 console.error("Initialization Error:", error);
                 showNotice("Error connecting to Firebase.");
             }
+        }
+        
+        async function loadAllInitialData() {
+            const usersRef = collection(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`);
+            const adminsRef = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
+            const bannedRef = collection(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`);
+
+            const [userSnapshot, adminSnapshot, bannedSnapshot] = await Promise.all([
+                getDocs(usersRef), getDocs(adminsRef), getDocs(bannedRef)
+            ]);
+
+            const adminIds = new Set(adminSnapshot.docs.map(d => d.id));
+            const bannedIds = new Set(bannedSnapshot.docs.map(d => d.id));
+
+            userSnapshot.docs.forEach(doc => {
+                const userData = doc.data();
+                userData.isAdmin = adminIds.has(doc.id) || doc.id === SUPER_ADMIN_UID;
+                userData.isBanned = bannedIds.has(doc.id);
+                allUsers.set(doc.id, userData);
+            });
+            initialDataLoaded = true;
         }
 
         function showNotice(message, type = 'error') {
@@ -212,42 +235,56 @@
         function showAccessDenied() {
             ui.adminDashboard.classList.add('hidden');
             ui.accessDenied.classList.remove('hidden');
+            ui.loadingOverlay.classList.add('hidden');
         }
 
-        function showDashboard() {
+        async function showDashboard() {
             ui.accessDenied.classList.add('hidden');
             ui.adminDashboard.classList.remove('hidden');
             
             if (currentUserRole === 'super') {
                 ui.adminManagementTab.classList.remove('hidden');
                 ui.canvasManagementTab.classList.remove('hidden');
-                loadAdminList();
             } else {
                 ui.adminManagementTab.classList.add('hidden');
                 ui.canvasManagementTab.classList.add('hidden');
             }
+            
+            if(!initialDataLoaded) {
+                 ui.loadingOverlay.classList.remove('hidden');
+                 await loadAllInitialData();
+                 ui.loadingOverlay.classList.add('hidden');
+            }
+            
+            renderUserList();
+            if (currentUserRole === 'super') loadAdminList();
+            
             listenForUserChanges();
         }
         
         function listenForUserChanges() {
             const usersRef = collection(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`);
-            const adminsRef = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
-            const bannedRef = collection(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`);
-
             onSnapshot(usersRef, (snapshot) => {
                 snapshot.docChanges().forEach(change => {
-                    allUsers.set(change.doc.id, { ...allUsers.get(change.doc.id), ...change.doc.data() });
+                    const existingData = allUsers.get(change.doc.id) || {};
+                    allUsers.set(change.doc.id, { ...existingData, ...change.doc.data() });
                 });
                 renderUserList();
+                if(currentUserRole === 'super') loadAdminList();
             });
+            
+            const adminsRef = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
             onSnapshot(adminsRef, (snapshot) => {
-                const adminIds = new Set(snapshot.docs.map(d => d.id));
-                allUsers.forEach(user => user.isAdmin = adminIds.has(user.uid) || user.uid === SUPER_ADMIN_UID);
-                renderUserList();
+                 const adminIds = new Set(snapshot.docs.map(d => d.id));
+                 allUsers.forEach((user, uid) => user.isAdmin = adminIds.has(uid) || uid === SUPER_ADMIN_UID);
+                 renderUserList();
+                 if(currentUserRole === 'super') loadAdminList();
             });
+
+            const bannedRef = collection(db, `artifacts/${appId}/public/data/${BANNED_USERS_COLLECTION_NAME}`);
             onSnapshot(bannedRef, (snapshot) => {
                 const bannedIds = new Set(snapshot.docs.map(d => d.id));
-                allUsers.forEach(user => user.isBanned = bannedIds.has(user.uid));
+                allUsers.forEach((user, uid) => user.isBanned = bannedIds.has(uid));
                 renderUserList();
             });
         }
@@ -309,27 +346,25 @@
             document.querySelectorAll('.promote-admin-btn').forEach(b => b.addEventListener('click', promoteToAdmin));
         }
 
-        async function loadAdminList() {
+        function loadAdminList() {
             if (currentUserRole !== 'super') return;
-            const adminsRef = collection(db, `artifacts/${appId}/public/data/${ADMINS_COLLECTION_NAME}`);
-            onSnapshot(adminsRef, (snapshot) => {
-                ui.adminListContainer.innerHTML = '';
-                snapshot.forEach(doc => {
-                    const adminData = allUsers.get(doc.id);
-                    const displayName = adminData ? adminData.displayName : 'Unknown Admin';
-                    const adminElement = document.createElement('div');
-                    adminElement.className = 'flex items-center justify-between bg-gray-700 p-3 rounded-md';
-                    adminElement.innerHTML = `
-                        <div>
-                            <div class="font-semibold">${displayName}</div>
-                            <span class="font-mono text-xs text-gray-400">${doc.id}</span>
-                        </div>
-                        <button data-uid="${doc.id}" class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-1 px-3 rounded-md remove-admin-btn">Remove</button>
-                    `;
-                    ui.adminListContainer.appendChild(adminElement);
-                });
-                document.querySelectorAll('.remove-admin-btn').forEach(b => b.addEventListener('click', removeAdmin));
+            ui.adminListContainer.innerHTML = '';
+            
+            const admins = Array.from(allUsers.values()).filter(u => u.isAdmin && u.uid !== SUPER_ADMIN_UID);
+
+            admins.forEach(admin => {
+                const adminElement = document.createElement('div');
+                adminElement.className = 'flex items-center justify-between bg-gray-700 p-3 rounded-md';
+                adminElement.innerHTML = `
+                    <div>
+                        <div class="font-semibold">${admin.displayName || 'Unknown Admin'}</div>
+                        <span class="font-mono text-xs text-gray-400">${admin.uid}</span>
+                    </div>
+                    <button data-uid="${admin.uid}" class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-1 px-3 rounded-md remove-admin-btn">Remove</button>
+                `;
+                ui.adminListContainer.appendChild(adminElement);
             });
+            document.querySelectorAll('.remove-admin-btn').forEach(b => b.addEventListener('click', removeAdmin));
         }
         
         function promoteToAdmin(e) {
