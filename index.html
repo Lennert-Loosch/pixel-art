@@ -82,7 +82,7 @@
             <div id="cooldown-timer" class="w-full p-3 bg-blue-800 rounded-lg text-center hidden">
                 Next pixel in <span id="cooldown-seconds">10</span>s
             </div>
-            <p class="text-sm text-gray-400 text-center">Drag/Scroll to Pan/Zoom. Hold 'F' to draw.</p>
+            <p id="controls-hint" class="text-sm text-gray-400 text-center">Drag/Scroll to Pan/Zoom.</p>
             <div id="color-palette" class="grid grid-cols-8 sm:grid-cols-5 gap-2"></div>
             <button id="eraser" class="eraser w-full py-3 px-4 bg-gray-700 hover:bg-gray-600 rounded-lg text-lg font-semibold transition-all duration-200 flex items-center justify-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 17a1 1 0 0 0 1 1H15a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1H3.5a1 1 0 0 0-1 1v8z"></path><path d="M15 8V6a2 2 0 0 0-2-2H8.5L6.5 2H4a2 2 0 0 0-2 2v2"></path><path d="M21 17h-1"></path><path d="M21 13h-4"></path><path d="M21 9h-2"></path></svg>
@@ -115,7 +115,7 @@
         const DRAG_THRESHOLD = 5;
 
         const ui = {
-            viewport: document.getElementById('canvas-viewport'), grid: document.getElementById('pixel-grid'), colorPalette: document.getElementById('color-palette'), eraserButton: document.getElementById('eraser'), userDisplay: document.getElementById('user-display'), loadingOverlay: document.getElementById('loading-overlay'), loginContainer: document.getElementById('login-container'), appContainer: document.getElementById('app-container'), googleLoginBtn: document.getElementById('google-login-btn'), errorNotice: document.getElementById('error-notice'), logoutBtn: document.getElementById('logout-btn'), bannedContainer: document.getElementById('banned-container'), adminBtn: document.getElementById('admin-btn'), viewModeNotice: document.getElementById('view-mode-notice'), viewModeText: document.getElementById('view-mode-text'), controlsPanel: document.getElementById('controls-panel'), placementUI: document.getElementById('placement-ui'), pendingCoords: document.getElementById('pending-coords'), confirmBtn: document.getElementById('confirm-btn'), cancelBtn: document.getElementById('cancel-btn'), cooldownTimer: document.getElementById('cooldown-timer'), cooldownSeconds: document.getElementById('cooldown-seconds')
+            viewport: document.getElementById('canvas-viewport'), grid: document.getElementById('pixel-grid'), colorPalette: document.getElementById('color-palette'), eraserButton: document.getElementById('eraser'), userDisplay: document.getElementById('user-display'), loadingOverlay: document.getElementById('loading-overlay'), loginContainer: document.getElementById('login-container'), appContainer: document.getElementById('app-container'), googleLoginBtn: document.getElementById('google-login-btn'), errorNotice: document.getElementById('error-notice'), logoutBtn: document.getElementById('logout-btn'), bannedContainer: document.getElementById('banned-container'), adminBtn: document.getElementById('admin-btn'), viewModeNotice: document.getElementById('view-mode-notice'), viewModeText: document.getElementById('view-mode-text'), controlsPanel: document.getElementById('controls-panel'), placementUI: document.getElementById('placement-ui'), pendingCoords: document.getElementById('pending-coords'), confirmBtn: document.getElementById('confirm-btn'), cancelBtn: document.getElementById('cancel-btn'), cooldownTimer: document.getElementById('cooldown-timer'), cooldownSeconds: document.getElementById('cooldown-seconds'), controlsHint: document.getElementById('controls-hint'),
         };
         
         function checkUrlParams() {
@@ -137,6 +137,7 @@
                 
                 onAuthStateChanged(auth, async (user) => {
                     if (userDocUnsub) { userDocUnsub(); userDocUnsub = null; }
+                    if (cooldownInterval) clearInterval(cooldownInterval);
                     ui.loadingOverlay.classList.add('hidden');
                     if (presenceInterval) clearInterval(presenceInterval);
 
@@ -151,12 +152,7 @@
                         userDocUnsub = onSnapshot(userDocRef, (docSnap) => {
                             if (docSnap.exists()) {
                                 const serverLastPlacement = docSnap.data().lastPlacementTime?.toMillis();
-                                if(serverLastPlacement) {
-                                    const elapsed = Date.now() - serverLastPlacement;
-                                    if (elapsed < PIXEL_COOLDOWN_S * 1000) {
-                                        startCooldown(serverLastPlacement);
-                                    }
-                                }
+                                if (serverLastPlacement) handleCooldownUI(serverLastPlacement);
                             }
                         });
 
@@ -164,8 +160,9 @@
                         presenceInterval = setInterval(() => updateUserPresence(user), 60000);
 
                         isAdmin = await checkAdminStatus(user.uid);
+                        ui.controlsHint.textContent = isAdmin ? 'Drag/Scroll to Pan/Zoom. Hold F to draw.' : 'Drag/Scroll to Pan/Zoom.';
                         if (isAdmin) ui.adminBtn.classList.remove('hidden'); else ui.adminBtn.classList.add('hidden');
-
+                        
                         userId = user.uid;
                         ui.userDisplay.textContent = user.displayName || user.email;
                         ui.loginContainer.classList.add('hidden');
@@ -307,7 +304,7 @@
             ui.eraserButton.addEventListener('click', () => { isErasing = !isErasing; updateSelectedToolUI(); });
             window.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = true; });
             window.addEventListener('keyup', e => { if (e.key.toLowerCase() === 'f') isFreeDrawing = false; });
-            ui.grid.addEventListener('mousemove', e => { if (isPanning || !isFreeDrawing) return; const pixel = e.target.closest('.pixel'); if (pixel) initiatePlacement(parseInt(pixel.dataset.x), parseInt(pixel.dataset.y), true); });
+            ui.grid.addEventListener('mousemove', e => { if (isPanning || !isFreeDrawing || !isAdmin) return; const pixel = e.target.closest('.pixel'); if (pixel) initiatePlacement(parseInt(pixel.dataset.x), parseInt(pixel.dataset.y), true); });
         }
         
         function getEventCoords(e) { return e.touches ? { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY } : { clientX: e.clientX, clientY: e.clientY }; }
@@ -349,19 +346,17 @@
             updateTransform();
         }
 
-        function startCooldown(startTime) {
+        function handleCooldownUI(serverTime) {
             if (isAdmin) return;
             if (cooldownInterval) clearInterval(cooldownInterval);
-
-            lastPlacementTime = startTime || Date.now();
+            lastPlacementTime = serverTime || 0;
 
             const timerTick = () => {
                 const elapsed = Date.now() - lastPlacementTime;
-                const secondsLeft = Math.ceil((PIXEL_COOLDOWN_S * 1000 - elapsed) / 1000);
-                
-                if (secondsLeft > 0) {
+                if (elapsed < PIXEL_COOLDOWN_S * 1000) {
+                    const secondsLeft = Math.ceil((PIXEL_COOLDOWN_S * 1000 - elapsed) / 1000);
                     ui.cooldownTimer.classList.remove('hidden');
-                    ui.cooldownSeconds.textContent = secondsLeft;
+                    ui.cooldownSeconds.textContent = secondsLeft > 0 ? secondsLeft : 0;
                 } else {
                     ui.cooldownTimer.classList.add('hidden');
                     clearInterval(cooldownInterval);
@@ -375,13 +370,8 @@
         function initiatePlacement(x, y, isAutoConfirm = false) {
             if (!userId || viewedUserId) return;
             const timeSinceLast = Date.now() - lastPlacementTime;
-            if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
-                if (!ui.cooldownTimer.classList.contains('hidden')) return;
-                const secondsLeft = Math.ceil((PIXEL_COOLDOWN_S * 1000 - timeSinceLast) / 1000);
-                ui.cooldownSeconds.textContent = secondsLeft;
-                ui.cooldownTimer.classList.remove('hidden');
-                return;
-            }
+            if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) return;
+
             if (pendingPixel) cancelPlacement();
             
             const pixelEl = document.getElementById(`pixel-${x}-${y}`);
@@ -391,7 +381,7 @@
             pixelEl.style.backgroundColor = isErasing ? '#4a5568' : selectedColor;
             pixelEl.classList.add('pending');
 
-            if ((isAutoConfirm && isAdmin) || (isAutoConfirm && !isAdmin)) {
+            if (isAutoConfirm && isAdmin) {
                 confirmPlacement();
             } else {
                 ui.pendingCoords.textContent = `${x}, ${y}`;
@@ -403,17 +393,16 @@
             if (!pendingPixel) return;
             const { x, y, color } = pendingPixel;
             
+            // This is the server update, which will trigger the snapshot listener to update the cooldown UI
+            const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, userId);
+            await setDoc(userDocRef, { lastPlacementTime: serverTimestamp() }, { merge: true });
+
             if (color === null) {
                 await deletePixel(x, y);
             } else {
                 await placePixel(x, y, color);
             }
             
-            startCooldown();
-            
-            const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, userId);
-            await setDoc(userDocRef, { lastPlacementTime: serverTimestamp() }, { merge: true });
-
             const pixelEl = document.getElementById(`pixel-${x}-${y}`);
             if(pixelEl) pixelEl.classList.remove('pending');
 
