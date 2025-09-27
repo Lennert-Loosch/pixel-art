@@ -108,7 +108,7 @@
         const PIXEL_COOLDOWN_S = 10;
         const COLORS = ['#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000', '#FF4500', '#FFA800', '#FFD635', '#00A368', '#7EED56', '#2450A4', '#3690EA', '#51E9F4', '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'];
         
-        let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval, isAdmin = false, isUserDataLoaded = false;
+        let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval, isAdmin = false;
         let viewedUserId = null, pendingPixel = null, lastPlacementTime = 0, cooldownInterval, userDocUnsub = null;
         let isFreeDrawing = false;
         let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
@@ -136,7 +136,6 @@
                 auth = getAuth(app);
                 
                 onAuthStateChanged(auth, async (user) => {
-                    isUserDataLoaded = false;
                     if (userDocUnsub) userDocUnsub();
                     if (cooldownInterval) clearInterval(cooldownInterval);
                     if (presenceInterval) clearInterval(presenceInterval);
@@ -152,13 +151,21 @@
                         
                         const userDocRef = doc(db, `artifacts/${appId}/public/data/${USERS_COLLECTION_NAME}`, user.uid);
                         
+                        // Fetch initial state first to prevent race conditions
+                        const initialDoc = await getDoc(userDocRef);
+                        if (initialDoc.exists()) {
+                            const serverLastPlacement = initialDoc.data().lastPlacementTime?.toMillis();
+                            if (serverLastPlacement) {
+                                lastPlacementTime = serverLastPlacement;
+                                handleCooldownUI(serverLastPlacement);
+                            }
+                        }
+
+                        // Then listen for real-time updates
                         userDocUnsub = onSnapshot(userDocRef, (docSnap) => {
                              if (docSnap.exists()) {
                                 const serverLastPlacement = docSnap.data().lastPlacementTime?.toMillis();
-                                if (serverLastPlacement) {
-                                    lastPlacementTime = serverLastPlacement;
-                                    handleCooldownUI(serverLastPlacement);
-                                }
+                                if (serverLastPlacement) lastPlacementTime = serverLastPlacement;
                             }
                         });
                         
@@ -180,7 +187,6 @@
                             isAppSetup = true;
                         }
 
-                        isUserDataLoaded = true;
                         ui.loadingOverlay.classList.add('hidden');
 
                     } else {
@@ -378,7 +384,7 @@
         }
         
         function initiatePlacement(x, y, isAutoConfirm = false) {
-            if (!userId || viewedUserId || !isUserDataLoaded) return;
+            if (!userId || viewedUserId) return;
             const timeSinceLast = Date.now() - lastPlacementTime;
             
             if (!isAdmin && timeSinceLast < PIXEL_COOLDOWN_S * 1000) {
