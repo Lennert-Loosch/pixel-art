@@ -97,20 +97,20 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, getDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, getDoc, serverTimestamp, updateDoc, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'live-pixel-canvas';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {"apiKey":"AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4","authDomain":"pixel-ed9f4.firebaseapp.com","projectId":"pixel-ed9f4","storageBucket":"pixel-ed9f4.appspot.com","messagingSenderId":"61835815357","appId":"1:61835815357:web:579d025b165c1edcbc8ad4"};
         
         const SUPER_ADMIN_UID = "5ECFbV0p1QTMDxOjbalkPMdEl2m1";
         const GRID_WIDTH = 100, GRID_HEIGHT = 76;
-        const USERS_COLLECTION_NAME = 'users', PIXEL_COLLECTION_NAME = 'pixels', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', ADMINS_COLLECTION_NAME = 'admins';
+        const USERS_COLLECTION_NAME = 'users', CANVAS_ROWS_COLLECTION_NAME = 'canvas_rows', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', ADMINS_COLLECTION_NAME = 'admins';
         const PIXEL_COOLDOWN_S = 10;
         const COLORS = ['#FFFFFF', '#C1C1C1', '#6F6F6F', '#000000', '#FF4500', '#FFA800', '#FFD635', '#00A368', '#7EED56', '#2450A4', '#3690EA', '#51E9F4', '#811E9F', '#B44AC0', '#FF99AA', '#9C6926'];
         
         let selectedColor = COLORS[0], isErasing = false, userId = null, db, auth, isAppSetup = false, presenceInterval, isAdmin = false;
         let viewedUserId = null, pendingPixel = null, lastPlacementTime = 0, cooldownInterval;
-        let isFreeDrawing = false, isAdminBrushActive = false;
+        let isFreeDrawing = false;
         let scale = 1, panX = 0, panY = 0, isPanning = false, startPanX = 0, startPanY = 0, mousedownX = 0, mousedownY = 0;
         const DRAG_THRESHOLD = 5;
 
@@ -416,35 +416,63 @@
 
         async function placePixel(x, y, color) {
             if (!userId || viewedUserId) return;
-            const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, `${x}-${y}`);
-            try { await setDoc(docRef, { x, y, color, userId }); } catch (error) { console.error("Error placing pixel: ", error); }
+            const rowDocRef = doc(db, `artifacts/${appId}/public/data/${CANVAS_ROWS_COLLECTION_NAME}`, `${y}`);
+            try {
+                await updateDoc(rowDocRef, {
+                    [`pixels.${x}`]: { color, userId }
+                });
+            } catch (e) {
+                // If update fails, it's likely the doc doesn't exist, so we create it.
+                await setDoc(rowDocRef, { 
+                    pixels: { [x]: { color, userId } }
+                }, { merge: true });
+            }
         }
 
         async function deletePixel(x, y) {
              if (!userId || viewedUserId) return;
-             const docRef = doc(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`, `${x}-${y}`);
-            try { await deleteDoc(docRef); } catch (error) { console.error("Error deleting pixel: ", error); }
+             const rowDocRef = doc(db, `artifacts/${appId}/public/data/${CANVAS_ROWS_COLLECTION_NAME}`, `${y}`);
+             try {
+                await updateDoc(rowDocRef, {
+                    [`pixels.${x}`]: deleteField()
+                });
+            } catch (error) { console.error("Error deleting pixel: ", error); }
         }
 
         function listenForPixelChanges() {
-            const collectionRef = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
+            const collectionRef = collection(db, `artifacts/${appId}/public/data/${CANVAS_ROWS_COLLECTION_NAME}`);
             onSnapshot(collectionRef, snapshot => {
                 snapshot.docChanges().forEach(change => {
+                    const y = parseInt(change.doc.id);
                     const data = change.doc.data();
-                    const pixelElement = document.getElementById(`pixel-${data.x}-${data.y}`);
-                    if (!pixelElement) return;
-
-                    const isViewedUserPixel = data.userId === viewedUserId;
-
+                    
                     if (change.type === "added" || change.type === "modified") {
-                        if (pendingPixel && pendingPixel.x === data.x && pendingPixel.y === data.y) {
-                        } else {
-                           pixelElement.style.backgroundColor = data.color;
+                        const pixels = data.pixels || {};
+                         for (let x = 0; x < GRID_WIDTH; x++) {
+                            const pixelElement = document.getElementById(`pixel-${x}-${y}`);
+                            if (!pixelElement) continue;
+
+                            const pixelData = pixels[x];
+                            if (pixelData) {
+                                if (!(pendingPixel && pendingPixel.x === x && pendingPixel.y === y)) {
+                                    pixelElement.style.backgroundColor = pixelData.color;
+                                }
+                                if (viewedUserId) {
+                                     pixelElement.classList.toggle('other-user', pixelData.userId !== viewedUserId);
+                                }
+                            } else {
+                                pixelElement.style.backgroundColor = '#4a5568';
+                                if (viewedUserId) pixelElement.classList.remove('other-user');
+                            }
                         }
-                        if (viewedUserId) pixelElement.classList.toggle('other-user', !isViewedUserPixel);
                     } else if (change.type === "removed") {
-                        pixelElement.style.backgroundColor = '#4a5568';
-                        if (viewedUserId) pixelElement.classList.remove('other-user');
+                        for (let x = 0; x < GRID_WIDTH; x++) {
+                           const pixelElement = document.getElementById(`pixel-${x}-${y}`);
+                            if (pixelElement) {
+                                pixelElement.style.backgroundColor = '#4a5568';
+                                if (viewedUserId) pixelElement.classList.remove('other-user');
+                            }
+                        }
                     }
                 });
             }, error => console.error("Error listening to pixel changes:", error));

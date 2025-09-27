@@ -107,7 +107,7 @@
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {"apiKey":"AIzaSyDF0tz5KFYgRVEFmW30x6kIxuRmE15c3b4","authDomain":"pixel-ed9f4.firebaseapp.com","projectId":"pixel-ed9f4","storageBucket":"pixel-ed9f4.appspot.com","messagingSenderId":"61835815357","appId":"1:61835815357:web:579d025b165c1edcbc8ad4"};
 
         const SUPER_ADMIN_UID = "5ECFbV0p1QTMDxOjbalkPMdEl2m1";
-        const USERS_COLLECTION_NAME = 'users', ADMINS_COLLECTION_NAME = 'admins', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', PIXEL_COLLECTION_NAME = 'pixels';
+        const USERS_COLLECTION_NAME = 'users', ADMINS_COLLECTION_NAME = 'admins', BANNED_USERS_COLLECTION_NAME = 'bannedUsers', CANVAS_ROWS_COLLECTION_NAME = 'canvas_rows';
         const ONLINE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
 
         let db, auth;
@@ -316,9 +316,7 @@
                     <a href="./index.html?viewUser=${user.uid}" class="bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold py-1 px-3 rounded-md">View Pixels</a>
                 `;
 
-                // Logic for showing ban/promote buttons
                 if (user.uid !== SUPER_ADMIN_UID && user.uid !== auth.currentUser.uid) { 
-                    // Super admin can ban regular admins, but regular admins cannot ban anyone.
                     if (currentUserRole === 'super' || !user.isAdmin) {
                          buttons += `<button data-uid="${user.uid}" class="${user.isBanned ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-red-600 hover:bg-red-700'} text-white text-sm font-bold py-1 px-3 rounded-md toggle-ban-btn">
                             ${user.isBanned ? 'Unban' : 'Ban'}
@@ -436,8 +434,8 @@
                 'This will permanently delete all pixels from the canvas. This action cannot be undone.',
                 async () => {
                     ui.loadingOverlay.classList.remove('hidden');
-                    const pixelsRef = collection(db, `artifacts/${appId}/public/data/${PIXEL_COLLECTION_NAME}`);
-                    const snapshot = await getDocs(pixelsRef);
+                    const canvasRowsRef = collection(db, `artifacts/${appId}/public/data/${CANVAS_ROWS_COLLECTION_NAME}`);
+                    const snapshot = await getDocs(canvasRowsRef);
                     const batch = writeBatch(db);
                     snapshot.docs.forEach(d => batch.delete(d.ref));
                     await batch.commit();
